@@ -92,26 +92,29 @@ export default function App() {
     Illustrative ROI; actual results depend on measures and financing approval.
   </p>
 
-  {/* PDF Download Button */}
-  <button
-    onClick={() => {
-      const el = document.getElementById("report-section");
-      if (!el) return;
-      const opt = {
-        margin: 0.5,
-        filename: "BuildCarbon_Report.pdf",
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2 },
-        jsPDF: { unit: "in", format: "a4", orientation: "portrait" },
-      };
-      // @ts-ignore
-      html2pdf().set(opt).from(el).save();
-    }}
-    className="mt-4 px-5 py-3 rounded-xl bg-emerald-600 text-white font-semibold shadow hover:bg-emerald-700"
-  >
-    Download PDF report
-  </button>
-</div>
+ 
+/* PDF Download Button */
+const handleDownload = async () => {
+  const el = document.getElementById("report-section");
+  if (!el) return;
+
+  const { default: html2pdf } = await import("html2pdf.js");
+  const opt = {
+    margin: 0.5,
+    filename: "BuildCarbon_Report.pdf",
+    image: { type: "jpeg", quality: 0.98 },
+    html2canvas: { scale: 2 },
+    jsPDF: { unit: "in", format: "a4", orientation: "portrait" },
+  };
+  (html2pdf as any)().set(opt).from(el).save();
+};
+
+<button
+  onClick={handleDownload}
+  className="mt-4 px-5 py-3 rounded-xl bg-emerald-600 text-white font-semibold shadow hover:bg-emerald-700"
+>
+  Download PDF report
+</button>
 
 
       <section className="px-6 py-10">
