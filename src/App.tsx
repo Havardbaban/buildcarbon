@@ -94,9 +94,24 @@ export default function App() {
           <h3 className="text-2xl font-bold">Ready to try with your data?</h3>
           <p className="mt-2 text-gray-700">Bring one month of energy & fuel data. We’ll produce a free baseline report and savings plan.</p>
           <div className="mt-6 flex items-center justify-center gap-3">
-            <a href="#" className="px-5 py-3 rounded-xl bg-emerald-600 text-white font-semibold shadow hover:bg-emerald-700">Book a pilot</a>
-            <a href="#" className="px-5 py-3 rounded-xl bg-white border font-semibold hover:bg-gray-100">Download sample report</a>
-          </div>
+  <a
+    href="https://forms.gle/WBfhFyUynKwqPdt88"
+    target="_blank"
+    rel="noreferrer"
+    className="px-5 py-3 rounded-xl bg-emerald-600 text-white font-semibold shadow hover:bg-emerald-700"
+  >
+    Book a pilot
+  </a>
+
+  <a
+    href="/sample-report.pdf"
+    download
+    className="px-5 py-3 rounded-xl bg-white border font-semibold hover:bg-gray-100"
+  >
+    Download sample report
+  </a>
+</div>
+
         </div>
       </section>
 
