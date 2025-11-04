@@ -1,9 +1,15 @@
 import React, { useMemo, useState } from 'react'
+import html2pdf from "html2pdf.js";
 
 function currency(n: number) {
-  if (!Number.isFinite(n)) return '–'
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n)
+  if (!Number.isFinite(n)) return "–";
+  return new Intl.NumberFormat("no-NO", {
+    style: "currency",
+    currency: "NOK",
+    maximumFractionDigits: 0,
+  }).format(n);
 }
+
 
 export default function App() {
   const [inputs, setInputs] = useState({
@@ -65,21 +71,48 @@ export default function App() {
               <Field label="Consultant fees replaced (€/yr)" name="consultantFees" value={inputs.consultantFees} onChange={onChange} />
             </div>
 
-            <div className="mt-5 p-4 bg-emerald-50 rounded-xl">
-              <h3 className="font-semibold mb-2">Results</h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-                <KPI label="Energy savings" value={currency(results.energySavings)} />
-                <KPI label="Interest savings" value={currency(results.interestSavings)} />
-                <KPI label="Tax savings (year 1)" value={currency(results.taxSavings)} />
-                <KPI label="Recurring annual savings" value={currency(results.recurringAnnual)} />
-                <KPI label="First-year total benefit" value={currency(results.firstYearTotal)} />
-                <KPI label="Payback period" value={Number.isFinite(results.paybackYears) ? `${(results.paybackYears * 12).toFixed(0)} months` : '–'} />
-              </div>
-              <p className="mt-3 text-xs text-gray-600">Illustrative ROI; actual results depend on measures and financing approval.</p>
-            </div>
-          </div>
-        </div>
-      </header>
+           <div id="report-section" className="mt-5 p-4 bg-emerald-50 rounded-xl">
+  <h3 className="font-semibold mb-2">Results</h3>
+  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+    <KPI label="Energy savings" value={currency(results.energySavings)} />
+    <KPI label="Interest savings" value={currency(results.interestSavings)} />
+    <KPI label="Tax savings (year 1)" value={currency(results.taxSavings)} />
+    <KPI label="Recurring annual savings" value={currency(results.recurringAnnual)} />
+    <KPI label="First-year total benefit" value={currency(results.firstYearTotal)} />
+    <KPI
+      label="Payback period"
+      value={
+        Number.isFinite(results.paybackYears)
+          ? `${(results.paybackYears * 12).toFixed(0)} months`
+          : "–"
+      }
+    />
+  </div>
+  <p className="mt-3 text-xs text-gray-600">
+    Illustrative ROI; actual results depend on measures and financing approval.
+  </p>
+
+  {/* PDF Download Button */}
+  <button
+    onClick={() => {
+      const el = document.getElementById("report-section");
+      if (!el) return;
+      const opt = {
+        margin: 0.5,
+        filename: "BuildCarbon_Report.pdf",
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: { scale: 2 },
+        jsPDF: { unit: "in", format: "a4", orientation: "portrait" },
+      };
+      // @ts-ignore
+      html2pdf().set(opt).from(el).save();
+    }}
+    className="mt-4 px-5 py-3 rounded-xl bg-emerald-600 text-white font-semibold shadow hover:bg-emerald-700"
+  >
+    Download PDF report
+  </button>
+</div>
+
 
       <section className="px-6 py-10">
         <div className="max-w-6xl mx-auto grid md:grid-cols-3 gap-6">
