@@ -1,5 +1,6 @@
-import React, { useRef, useState } from "react";
-import EnvestoReport, { EnvestoInputs } from "./EnvestoReport";
+import React, { useRef, useState, useMemo } from "react";
+import EnvestoReport, { EnvestoInputs, Recommendation } from "./EnvestoReport";
+import { recommendMeasures } from "./recommend";
 
 export default function App() {
   const [inputs, setInputs] = useState<EnvestoInputs>({
@@ -19,17 +20,20 @@ export default function App() {
     setInputs((prev) => ({ ...prev, [name]: Number(value) }));
   };
 
-  // NEW: ref to call generate()
-  const reportRef = useRef<{ generate: () => Promise<void> } | null>(null);
+  // Compute opportunities from inputs
+  const measures: Recommendation[] = useMemo(() => recommendMeasures(inputs), [inputs]);
 
+  // Expose PDF generate()
+  const reportRef = useRef<{ generate: () => Promise<void> } | null>(null);
   const handleDownload = async () => {
     await reportRef.current?.generate();
   };
 
   return (
     <div className="mx-auto max-w-6xl p-6">
-      <h1 className="text-2xl font-semibold">Envesto – Bank-Grade PDF Generator</h1>
+      <h1 className="text-2xl font-semibold">Envesto – Opportunities & Bank-Grade PDF</h1>
 
+      {/* Inputs */}
       <div className="mt-4 grid grid-cols-2 gap-4">
         {Object.entries(inputs).map(([key, val]) => (
           <label key={key} className="text-sm">
@@ -45,9 +49,20 @@ export default function App() {
         ))}
       </div>
 
-      {/* Your page content… */}
+      {/* Quick visible Opportunities preview */}
+      <div className="mt-6 rounded-xl border p-4">
+        <div className="text-slate-500">Top Opportunities (preview)</div>
+        <ul className="mt-2 grid grid-cols-2 gap-2 text-sm">
+          {measures.slice(0, 6).map((m) => (
+            <li key={m.id} className="flex items-center justify-between">
+              <span>{m.title}</span>
+              <span className="font-medium">{m.payback_years ?? "–"} yrs</span>
+            </li>
+          ))}
+        </ul>
+      </div>
 
-      {/* Your existing green button should call handleDownload */}
+      {/* Your main download button */}
       <div className="mt-6">
         <button
           onClick={handleDownload}
@@ -58,14 +73,15 @@ export default function App() {
         </button>
       </div>
 
-      {/* Render the bank-grade report off-screen; it will be used only for PDF generation */}
-      <div style={{ position: "absolute", left: "-99999px", top: 0 }}>
+      {/* Render the full report off-screen for PDF capture */}
+      <div style={{ position: "absolute", left: "-9999px", top: 0, visibility: "hidden" }}>
         <EnvestoReport
           ref={reportRef}
           inputs={inputs}
           companyName="Acme AS"
           projectTitle="Energy Efficiency Upgrade"
-          showButton={false} // hide internal button
+          showButton={false}
+          measures={measures}
         />
       </div>
     </div>
