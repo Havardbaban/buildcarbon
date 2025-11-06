@@ -1,0 +1,52 @@
+[
+  {
+    "id": "hvac-night-setback",
+    "category": "HVAC",
+    "title": "Night & Weekend Setback",
+    "trigger": "Base load at night/weekend > 30% of weekday daytime",
+    "desc": "Reduce after-hours HVAC/ventilation to setback levels using schedules.",
+    "default_capex": 15000,
+    "lifetime_years": 10,
+    "save_pct_of_energy_spend": 0.06
+  },
+  {
+    "id": "lighting-led",
+    "category": "Lighting",
+    "title": "LED Retrofit + Controls",
+    "trigger": "Old fluorescent/halogen or high lighting intensity vs benchmark",
+    "desc": "Replace fixtures with LED and add occupancy/daylight sensors.",
+    "default_capex": 120000,
+    "lifetime_years": 12,
+    "save_pct_of_energy_spend": 0.12
+  },
+  {
+    "id": "vfd-pumps-fans",
+    "category": "Drives",
+    "title": "Variable Frequency Drives for Pumps/Fans",
+    "trigger": "Constant-speed motors with varying demand",
+    "desc": "Install VFDs to modulate speed to actual demand.",
+    "default_capex": 200000,
+    "lifetime_years": 12,
+    "save_pct_of_energy_spend": 0.08
+  },
+  {
+    "id": "air-leak-fix",
+    "category": "Compressed Air",
+    "title": "Compressed Air Leak Detection & Repair",
+    "trigger": "High compressor runtime / pressure drops",
+    "desc": "Survey for leaks and fix, add maintenance routine.",
+    "default_capex": 30000,
+    "lifetime_years": 5,
+    "save_pct_of_energy_spend": 0.04
+  },
+  {
+    "id": "insulation-envelope",
+    "category": "Envelope",
+    "title": "Insulation & Envelope Improvements",
+    "trigger": "High heating/cooling loads vs. benchmark",
+    "desc": "Insulate roof/walls, seal infiltration, upgrade glazing (phased).",
+    "default_capex": 250000,
+    "lifetime_years": 20,
+    "save_pct_of_energy_spend": 0.07
+  }
+]
