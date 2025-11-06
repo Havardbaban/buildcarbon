@@ -1,5 +1,5 @@
 // FILE: src/EnvestoReport.tsx
-// Bank/insurance/tax-ready sustainability ROI report with PDF export.
+// Bank/insurance/tax-ready ROI report with PDF export.
 // Vite + React + TypeScript. Uses html2pdf.js. Exposes ref.generate().
 
 import React, {
@@ -14,11 +14,11 @@ import html2pdf from "html2pdf.js";
 // —— Envesto brand tokens ——
 const BRAND = {
   name: "Envesto",
-  primary: "#0E9F6E", // emerald-600
-  primaryDark: "#047857", // emerald-700
-  ink: "#0F172A", // slate-900
-  subtle: "#475569", // slate-600
-  border: "#E2E8F0", // slate-200
+  primary: "#0E9F6E",
+  primaryDark: "#047857",
+  ink: "#0F172A",
+  subtle: "#475569",
+  border: "#E2E8F0",
 };
 
 // —— Helper formatters ——
@@ -110,8 +110,7 @@ type Props = {
   companyName?: string;
   projectTitle?: string;
   currencyCode?: string;
-  /** Hide/show the internal “Generate PDF” button. Default: true */
-  showButton?: boolean;
+  showButton?: boolean; // default true
 };
 
 // —— Component (exposes ref.generate()) ——
@@ -201,18 +200,34 @@ const EnvestoReport = forwardRef(function EnvestoReport(
     };
   }, [inputs]);
 
+  // UPDATED: prevents clipping + forces download as fallback
   const generatePDF = async () => {
     const el = wrapRef.current;
     if (!el) return;
+
     const opt = {
-      margin: [10, 12, 10, 12],
+      margin: [10, 12, 10, 12], // top, right, bottom, left (mm)
       filename: `${BRAND.name}-${projectTitle.replace(/\s+/g, "_")}-Report.pdf`,
       image: { type: "jpeg", quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true, logging: false },
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      pagebreak: { mode: ["avoid-all", "css", "legacy"] },
+      pagebreak: { mode: ["css", "legacy"] },
     } as any;
-    await html2pdf().from(el).set(opt).save();
+
+    try {
+      await (html2pdf() as any).from(el).set(opt).save();
+    } catch {
+      const pdf = await (html2pdf() as any).from(el).set(opt).toPdf().get("pdf");
+      const blob = pdf.output("blob");
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = opt.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
   };
 
   // Expose .generate() to parent
@@ -235,11 +250,11 @@ const EnvestoReport = forwardRef(function EnvestoReport(
         )}
       </div>
 
-      {/* PDF wrapper (A4 width) */}
+      {/* PDF wrapper (A4 is 210mm; with 12mm side margins, content width = 186mm) */}
       <div
         ref={wrapRef}
         className="bg-white shadow rounded-2xl px-10 py-12 mx-auto"
-        style={{ width: "210mm", maxWidth: "210mm" }}
+        style={{ width: "186mm", maxWidth: "186mm" }}
       >
         {/* ——— Cover Page ——— */}
         <section className="min-h-[260mm] flex flex-col justify-between">
@@ -260,8 +275,7 @@ const EnvestoReport = forwardRef(function EnvestoReport(
               {projectTitle}
             </h2>
             <p className="mt-3 text-slate-600 max-w-prose">
-              A financial-grade assessment of investment value, risk, compliance, and environmental
-              impact prepared by {BRAND.name}.
+              A financial-grade assessment of investment value, risk, compliance, and environmental impact prepared by {BRAND.name}.
             </p>
 
             <div className="mt-10 grid grid-cols-3 gap-4 text-sm">
@@ -287,103 +301,61 @@ const EnvestoReport = forwardRef(function EnvestoReport(
 
         <div className="break-before-page" />
 
-        {/* ——— Executive Summary ——— */}
+        {/* Executive Summary */}
         <section className="min-h-[260mm]">
-          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>
-            Executive Summary
-          </h3>
+          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>Executive Summary</h3>
           <div className="mt-4 grid grid-cols-2 gap-6 text-sm leading-relaxed">
             <div>
-              <p>
-                <span className="font-semibold">Objective:</span> Reduce energy spend by{" "}
-                {pct(inputs.reductionPct)} through targeted efficiency measures, financed via a green loan.
-              </p>
-              <p className="mt-3">
-                <span className="font-semibold">Financial outcome (levered):</span> NPV{" "}
-                {currency(model.npvLevered, currencyCode)}, IRR {pct(model.irrLevered * 100)} with a simple
-                payback of {model.paybackYears ?? "–"} years.
-              </p>
-              <p className="mt-3">
-                <span className="font-semibold">Compliance & Risk:</span> Structured for bank underwriting,
-                insurance risk controls, and tax documentation with explicit assumptions and schedules.
-              </p>
+              <p><span className="font-semibold">Objective:</span> Reduce energy spend by {pct(inputs.reductionPct)} via efficiency measures financed by a green loan.</p>
+              <p className="mt-3"><span className="font-semibold">Financial outcome (levered):</span> NPV {currency(model.npvLevered, currencyCode)}, IRR {pct(model.irrLevered * 100)} with simple payback {model.paybackYears ?? "–"} years.</p>
+              <p className="mt-3"><span className="font-semibold">Compliance & Risk:</span> Provides amortization, DSCR, NPV/IRR and tax notes for banks, insurers and tax authorities.</p>
             </div>
             <div>
-              <div
-                className="rounded-xl border p-4"
-                style={{ borderColor: BRAND.border, background: "#F8FAFC" }}
-              >
+              <div className="rounded-xl border p-4" style={{ borderColor: BRAND.border, background: "#F8FAFC" }}>
                 <div className="text-slate-500">Key Metrics</div>
                 <ul className="mt-2 space-y-1">
-                  <li>
-                    Annual after-tax savings:{" "}
-                    <span className="font-semibold">{currency(model.savingsAfterTax, currencyCode)}</span>
-                  </li>
-                  <li>
-                    Annual debt service (years 1–{ASSUMPTIONS.loanYears}):{" "}
-                    <span className="font-semibold">{currency(model.annualDebtService, currencyCode)}</span>
-                  </li>
-                  <li>
-                    DSCR (year 1):{" "}
-                    <span className="font-semibold">
-                      {model.dscr[0] ? model.dscr[0].dscr.toFixed(2) : "–"}
-                    </span>
-                  </li>
-                  <li>
-                    Analysis horizon: <span className="font-semibold">{ASSUMPTIONS.analysisYears} years</span>
-                  </li>
-                  <li>
-                    Discount rate: <span className="font-semibold">{pct(ASSUMPTIONS.discountRate * 100)}</span>
-                  </li>
+                  <li>After-tax savings: <span className="font-semibold">{currency(model.savingsAfterTax, currencyCode)}</span></li>
+                  <li>Annual debt service (1–{ASSUMPTIONS.loanYears}): <span className="font-semibold">{currency(model.annualDebtService, currencyCode)}</span></li>
+                  <li>DSCR (year 1): <span className="font-semibold">{model.dscr[0] ? model.dscr[0].dscr.toFixed(2) : "–"}</span></li>
+                  <li>Horizon: <span className="font-semibold">{ASSUMPTIONS.analysisYears} years</span></li>
+                  <li>Discount rate: <span className="font-semibold">{pct(ASSUMPTIONS.discountRate * 100)}</span></li>
                 </ul>
               </div>
             </div>
           </div>
-
-          <div className="mt-8 text-xs text-slate-500">
-            All amounts shown in {currencyCode}. Figures are derived from inputs provided and assumptions
-            listed under Appendix.
-          </div>
+          <div className="mt-8 text-xs text-slate-500">All amounts in {currencyCode}. See Appendix for assumptions.</div>
         </section>
 
         <div className="break-before-page" />
 
-        {/* ——— Project Overview ——— */}
+        {/* Project Overview */}
         <section className="min-h-[260mm]">
-          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>
-            Project Overview
-          </h3>
+          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>Project Overview</h3>
           <div className="mt-4 grid grid-cols-2 gap-6 text-sm">
             <div>
-              <Table
-                rows={[
-                  ["Baseline energy spend (annual)", currency(inputs.energySpend, currencyCode)],
-                  ["Expected reduction", pct(inputs.reductionPct)],
-                  ["Gross savings (annual)", currency(model.savingsGross, currencyCode)],
-                  ["After-tax savings (annual)", currency(model.savingsAfterTax, currencyCode)],
-                ]}
-              />
+              <Table rows={[
+                ["Baseline energy spend (annual)", currency(inputs.energySpend, currencyCode)],
+                ["Expected reduction", pct(inputs.reductionPct)],
+                ["Gross savings (annual)", currency(model.savingsGross, currencyCode)],
+                ["After-tax savings (annual)", currency(model.savingsAfterTax, currencyCode)],
+              ]}/>
             </div>
             <div>
-              <Table
-                rows={[
-                  ["Capex", currency(inputs.capex, currencyCode)],
-                  ["Consultant fees", currency(inputs.consultantFees, currencyCode)],
-                  ["Grant/support", currency(inputs.grant, currencyCode)],
-                  ["Net upfront investment", currency(model.upfront, currencyCode)],
-                ]}
-              />
+              <Table rows={[
+                ["Capex", currency(inputs.capex, currencyCode)],
+                ["Consultant fees", currency(inputs.consultantFees, currencyCode)],
+                ["Grant/support", currency(inputs.grant, currencyCode)],
+                ["Net upfront investment", currency(model.upfront, currencyCode)],
+              ]}/>
             </div>
           </div>
         </section>
 
         <div className="break-before-page" />
 
-        {/* ——— Investment, Financing & Debt Service ——— */}
+        {/* Investment, Financing & Debt Service */}
         <section className="min-h-[260mm]">
-          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>
-            Investment, Financing & Debt Service
-          </h3>
+          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>Investment, Financing & Debt Service</h3>
 
           <div className="mt-4 text-sm">
             <table className="w-full text-sm">
@@ -416,9 +388,7 @@ const EnvestoReport = forwardRef(function EnvestoReport(
                 <div key={d.year} className="p-3 rounded-xl border" style={{ borderColor: BRAND.border }}>
                   <div className="text-slate-500">DSCR – Year {d.year}</div>
                   <div className="text-xl font-semibold">{d.dscr.toFixed(2)}</div>
-                  <div className="text-slate-500 text-xs">
-                    Debt service: {currency(d.debtService, currencyCode)}
-                  </div>
+                  <div className="text-slate-500 text-xs">Debt service: {currency(d.debtService, currencyCode)}</div>
                 </div>
               ))}
             </div>
@@ -427,23 +397,16 @@ const EnvestoReport = forwardRef(function EnvestoReport(
 
         <div className="break-before-page" />
 
-        {/* ——— ROI & Cashflows ——— */}
+        {/* ROI & Cashflows */}
         <section className="min-h-[260mm]">
-          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>
-            ROI & Cash Flow Analysis
-          </h3>
+          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>ROI & Cash Flow Analysis</h3>
           <div className="mt-4 grid grid-cols-2 gap-6 text-sm">
             <div>
               <Card title="Unlevered (project) cash flows">
                 <CFTable cash={model.ocf} currencyCode={currencyCode} />
                 <div className="mt-3 text-sm">
-                  <div>
-                    NPV @ {pct(ASSUMPTIONS.discountRate * 100)}:{" "}
-                    <span className="font-semibold">{currency(model.npvUnlevered, currencyCode)}</span>
-                  </div>
-                  <div>
-                    IRR: <span className="font-semibold">{pct(model.irrUnlevered * 100)}</span>
-                  </div>
+                  <div>NPV @ {pct(ASSUMPTIONS.discountRate * 100)}: <span className="font-semibold">{currency(model.npvUnlevered, currencyCode)}</span></div>
+                  <div>IRR: <span className="font-semibold">{pct(model.irrUnlevered * 100)}</span></div>
                 </div>
               </Card>
             </div>
@@ -451,16 +414,9 @@ const EnvestoReport = forwardRef(function EnvestoReport(
               <Card title="Levered (to equity) cash flows">
                 <CFTable cash={model.lcf} currencyCode={currencyCode} />
                 <div className="mt-3 text-sm">
-                  <div>
-                    NPV @ {pct(ASSUMPTIONS.discountRate * 100)}:{" "}
-                    <span className="font-semibold">{currency(model.npvLevered, currencyCode)}</span>
-                  </div>
-                  <div>
-                    IRR: <span className="font-semibold">{pct(model.irrLevered * 100)}</span>
-                  </div>
-                  <div>
-                    Simple payback: <span className="font-semibold">{model.paybackYears ?? "–"} years</span>
-                  </div>
+                  <div>NPV @ {pct(ASSUMPTIONS.discountRate * 100)}: <span className="font-semibold">{currency(model.npvLevered, currencyCode)}</span></div>
+                  <div>IRR: <span className="font-semibold">{pct(model.irrLevered * 100)}</span></div>
+                  <div>Simple payback: <span className="font-semibold">{model.paybackYears ?? "–"} years</span></div>
                 </div>
               </Card>
             </div>
@@ -469,37 +425,19 @@ const EnvestoReport = forwardRef(function EnvestoReport(
 
         <div className="break-before-page" />
 
-        {/* ——— Environmental Impact & Compliance ——— */}
+        {/* Environmental Impact & Compliance */}
         <section className="min-h-[260mm]">
-          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>
-            Environmental Impact & Compliance
-          </h3>
+          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>Environmental Impact & Compliance</h3>
           <div className="mt-4 grid grid-cols-2 gap-6 text-sm">
             <div>
               <Card title="Estimated impact (assumption-based)">
                 <ul className="mt-2 space-y-1">
-                  <li>
-                    Baseline energy:{" "}
-                    <span className="font-semibold">
-                      {Math.round(model.baselineKWh).toLocaleString()} kWh/year
-                    </span>
-                  </li>
-                  <li>
-                    Energy saved:{" "}
-                    <span className="font-semibold">
-                      {Math.round(model.savedKWh).toLocaleString()} kWh/year
-                    </span>
-                  </li>
-                  <li>
-                    CO₂e avoided:{" "}
-                    <span className="font-semibold">
-                      {Math.round(model.co2SavedKg).toLocaleString()} kg CO₂e/year
-                    </span>
-                  </li>
+                  <li>Baseline energy: <span className="font-semibold">{Math.round(model.baselineKWh).toLocaleString()} kWh/year</span></li>
+                  <li>Energy saved: <span className="font-semibold">{Math.round(model.savedKWh).toLocaleString()} kWh/year</span></li>
+                  <li>CO₂e avoided: <span className="font-semibold">{Math.round(model.co2SavedKg).toLocaleString()} kg CO₂e/year</span></li>
                 </ul>
                 <div className="text-xs text-slate-500 mt-2">
-                  Assumes energy price {currency(ASSUMPTIONS.energyPriceNOKperKWh)} per kWh and grid factor{" "}
-                  {ASSUMPTIONS.gridEmissionFactorKgPerKWh} kg CO₂e/kWh. Replace with metered data if available.
+                  Assumes energy price {currency(ASSUMPTIONS.energyPriceNOKperKWh)} per kWh and grid factor {ASSUMPTIONS.gridEmissionFactorKgPerKWh} kg CO₂e/kWh.
                 </div>
               </Card>
             </div>
@@ -508,7 +446,7 @@ const EnvestoReport = forwardRef(function EnvestoReport(
                 <ul className="mt-2 list-disc pl-5 space-y-1">
                   <li>Financial: NPV/IRR, amortization and DSCR for credit underwriting.</li>
                   <li>Insurance: Lower operational risk via reduced energy dependency.</li>
-                  <li>Tax: Depreciation and grant treatment documented; after-tax savings applied.</li>
+                  <li>Tax: Depreciation & grant treatment documented; after-tax savings applied.</li>
                 </ul>
               </Card>
             </div>
@@ -517,27 +455,23 @@ const EnvestoReport = forwardRef(function EnvestoReport(
 
         <div className="break-before-page" />
 
-        {/* ——— Appendix ——— */}
+        {/* Appendix */}
         <section className="min-h-[260mm]">
-          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>
-            Appendix
-          </h3>
+          <h3 className="text-2xl font-semibold" style={{ color: BRAND.ink }}>Appendix</h3>
           <div className="mt-4 grid grid-cols-2 gap-6 text-sm">
             <div>
               <Card title="Inputs">
-                <Table
-                  rows={[
-                    ["Energy spend (annual)", currency(inputs.energySpend, currencyCode)],
-                    ["Reduction", pct(inputs.reductionPct)],
-                    ["Grant", currency(inputs.grant, currencyCode)],
-                    ["Loan amount", currency(inputs.loanAmount, currencyCode)],
-                    ["Interest (current)", pct(inputs.rateCurrent)],
-                    ["Interest (green)", pct(inputs.rateGreen)],
-                    ["Capex", currency(inputs.capex, currencyCode)],
-                    ["Consultant fees", currency(inputs.consultantFees, currencyCode)],
-                    ["Tax rate", pct(inputs.taxRate)],
-                  ]}
-                />
+                <Table rows={[
+                  ["Energy spend (annual)", currency(inputs.energySpend, currencyCode)],
+                  ["Reduction", pct(inputs.reductionPct)],
+                  ["Grant", currency(inputs.grant, currencyCode)],
+                  ["Loan amount", currency(inputs.loanAmount, currencyCode)],
+                  ["Interest (current)", pct(inputs.rateCurrent)],
+                  ["Interest (green)", pct(inputs.rateGreen)],
+                  ["Capex", currency(inputs.capex, currencyCode)],
+                  ["Consultant fees", currency(inputs.consultantFees, currencyCode)],
+                  ["Tax rate", pct(inputs.taxRate)],
+                ]}/>
               </Card>
             </div>
             <div>
@@ -550,20 +484,20 @@ const EnvestoReport = forwardRef(function EnvestoReport(
                   <li>Energy price: {currency(ASSUMPTIONS.energyPriceNOKperKWh, currencyCode)} / kWh</li>
                   <li>Grid CO₂ factor: {ASSUMPTIONS.gridEmissionFactorKgPerKWh} kg/kWh</li>
                 </ul>
-                <div className="text-xs text-slate-500 mt-2">
-                  Assumptions are placeholders – replace with client-specific values or metered data for bank
-                  submissions.
-                </div>
+                <div className="text-xs text-slate-500 mt-2">Assumptions are placeholders – replace with client-specific values or metered data for bank submissions.</div>
               </Card>
             </div>
           </div>
         </section>
       </div>
 
-      {/* Print helpers */}
+      {/* Print helpers + overflow safety */}
       <style>{`
+        * { box-sizing: border-box; }
         .break-before-page { page-break-before: always; height: 1px; }
         @media print { .break-before-page { break-before: page; } }
+        table { table-layout: fixed; width: 100%; }
+        td, th { word-break: break-word; }
       `}</style>
     </div>
   );
@@ -607,9 +541,7 @@ function CFTable({ cash, currencyCode }: { cash: number[]; currencyCode: string 
         <tr className="text-left text-slate-500 border-b" style={{ borderColor: BRAND.border }}>
           <th className="py-2">Year</th>
           {cash.map((_, i) => (
-            <th key={i} className="py-2 text-right">
-              {i}
-            </th>
+            <th key={i} className="py-2 text-right">{i}</th>
           ))}
         </tr>
       </thead>
@@ -617,9 +549,7 @@ function CFTable({ cash, currencyCode }: { cash: number[]; currencyCode: string 
         <tr>
           <td className="py-2 text-slate-500">CF</td>
           {cash.map((v, i) => (
-            <td key={i} className="py-2 text-right font-medium">
-              {currency(v, currencyCode)}
-            </td>
+            <td key={i} className="py-2 text-right font-medium">{currency(v, currencyCode)}</td>
           ))}
         </tr>
       </tbody>
