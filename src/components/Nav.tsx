@@ -4,7 +4,10 @@ export default function Nav() {
   return (
     <header className="border-b bg-white">
       <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
-        <Link to="/" className="font-bold text-xl tracking-tight">Envesto</Link>
+        <Link to="/" className="flex items-center gap-2">
+          {/* If you uploaded logo.png, change src to "/logo.png" */}
+          <img src="/logo.svg" alt="Envesto" className="h-6 w-auto" />
+        </Link>
         <nav className="flex items-center gap-6 text-sm">
           <Link to="/">Home</Link>
           <Link to="/demo">Demo</Link>
