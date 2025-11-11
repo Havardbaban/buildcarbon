@@ -21,12 +21,10 @@ export default function InvoiceUpload({ onFinished }: Props) {
   }
 
   async function extractTextFromFile(file: File): Promise<string> {
-    // Plain text
-    if (file.type === "text/plain") {
-      return await file.text();
-    }
+    // .txt files
+    if (file.type === "text/plain") return await file.text();
 
-    // PDF -> convert each page to PNG and OCR each
+    // PDFs: convert pages to PNGs and OCR
     if (file.type === "application/pdf") {
       const pages = await pdfToPngBlobs(file);
       let combined = "";
@@ -37,13 +35,13 @@ export default function InvoiceUpload({ onFinished }: Props) {
       return combined.trim();
     }
 
-    // Images (png/jpg/jpeg/webp, etc.)
+    // Images
     if (file.type.startsWith("image/")) {
       setProgress("Reading image...");
       return await ocrBlob(file);
     }
 
-    // Fallback: try to read as text
+    // Fallback try
     try {
       return await file.text();
     } catch {
@@ -54,35 +52,33 @@ export default function InvoiceUpload({ onFinished }: Props) {
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
-    setErr(null);
     setBusy(true);
+    setErr(null);
     setProgress("Starting...");
 
     try {
       const file = files[0];
       const rowId = uuidv4();
 
-      // 1) Insert a placeholder row first
+      // 1) Insert placeholder row
       setProgress("Creating invoice record...");
-      const { error: insErr } = await supabase
-        .from("invoices")
-        .insert({
-          id: rowId,
-          filename: file.name,
-          status: "processing",
-        });
+      const { error: insErr } = await supabase.from("invoices").insert({
+        id: rowId,
+        filename: file.name,
+        status: "processing",
+      });
       if (insErr) throw insErr;
 
-      // 2) Extract text (OCR when needed)
-      setProgress("Extracting text from file...");
+      // 2) OCR / extract text
+      setProgress("Extracting text...");
       const text = await extractTextFromFile(file);
 
       // 3) Parse fields from text
-      setProgress("Parsing invoice fields...");
+      setProgress("Parsing fields...");
       const parsed = await parseInvoice(text);
 
-      // 4) Update the row with parsed data
-      setProgress("Saving extracted data...");
+      // 4) Update row with parsed data
+      setProgress("Saving data...");
       const { error: updErr } = await supabase
         .from("invoices")
         .update({
@@ -95,7 +91,6 @@ export default function InvoiceUpload({ onFinished }: Props) {
           status: "done",
         })
         .eq("id", rowId);
-
       if (updErr) throw updErr;
 
       setProgress("Complete!");
