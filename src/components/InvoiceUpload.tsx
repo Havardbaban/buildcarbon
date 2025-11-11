@@ -3,7 +3,9 @@ import { v4 as uuidv4 } from "uuid";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
-import { parseInvoiceText } from "../lib/invoiceParser.ts";
+import parseInvoice from "../lib/invoiceParser";
+// or, if you prefer named export, change both files consistently
+
 
 type Props = {
   onFinished?: () => void;
