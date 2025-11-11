@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
-import { parseInvoiceText } from "../lib/invoiceParser";
+import { parseInvoiceText } from "../lib/invoice-parser.ts"; // ✅ updated and explicit path
 
 type Props = {
   onFinished?: () => void;
@@ -25,7 +25,7 @@ export default function InvoiceUpload({ onFinished }: Props) {
       const ext = file.name.split(".").pop() || "dat";
       const path = `invoices/${id}.${ext}`; // stored at bucket root
 
-      setProgress("Uploading to storage…");
+      setProgress("Uploading to storage...");
       const { data: upload, error: upErr } = await supabase.storage
         .from("invoices")
         .upload(path, file, { upsert: true });
@@ -41,80 +41,66 @@ export default function InvoiceUpload({ onFinished }: Props) {
         .select();
 
       if (insErr) throw insErr;
-      const row = insertRows![0];
+      const row = insertRows[0];
 
       // Get a public/signed URL for preview
       let public_url: string | null = null;
       const pub = supabase.storage.from("invoices").getPublicUrl(storage_path);
       public_url = pub?.data?.publicUrl ?? null;
 
-      // OCR
-      setProgress("Running OCR…");
-      const images: Blob[] =
-        file.type === "application/pdf" ? await pdfToPngBlobs(file) : [file];
+      // OCR if PDF
+      setProgress("Extracting text...");
+      let text = "";
 
-      let fullText = "";
-      for (let i = 0; i < images.length; i++) {
-        setProgress(`OCR page ${i + 1}/${images.length}…`);
-        const img = images[i];
-        const { data } = await Tesseract.recognize(img, "eng+nor", {
-          logger: (m) => {
-            if (m.status === "recognizing text") {
-              setProgress(`OCR page ${i + 1}/${images.length}: ${Math.round(m.progress * 100)}%`);
-            }
-          },
-        });
-        fullText += "\n" + data.text;
+      if (ext === "pdf") {
+        const blobs = await pdfToPngBlobs(file);
+        for (const blob of blobs) {
+          const { data } = await Tesseract.recognize(blob, "eng");
+          text += data.text + "\n";
+        }
+      } else {
+        const arrayBuffer = await file.arrayBuffer();
+        const decoded = new TextDecoder().decode(arrayBuffer);
+        text = decoded;
       }
 
-      // Parse
-      const parsed = parseInvoiceText(fullText);
-      // VERY simple CO₂ estimate placeholder: 0.06 kg per NOK 1 spent (adjust later)
-      const co2_kg =
-        parsed.total && Number.isFinite(parsed.total) ? Math.round(parsed.total * 0.06) : null;
+      const parsed = parseInvoiceText(text);
 
-      // Update row
-      setProgress("Saving parsed data…");
-      const { error: upError } = await supabase
+      // Update invoice with parsed data
+      setProgress("Saving extracted data...");
+      const { error: updErr } = await supabase
         .from("invoices")
         .update({
-          status: "parsed",
-          ocr_text: fullText,
-          vendor: parsed.vendor ?? null,
-          invoice_date: parsed.dateISO ?? null,
-          total_amount: parsed.total ?? null,
-          public_url,
-          co2_kg,
+          vendor: parsed.vendor,
+          date: parsed.dateISO,
+          total: parsed.total,
+          status: "done",
         })
         .eq("id", row.id);
 
-      if (upError) throw upError;
+      if (updErr) throw updErr;
 
-      setProgress("Done!");
-      onFinished?.();
+      setProgress("Complete!");
+      setBusy(false);
+      if (onFinished) onFinished();
     } catch (e: any) {
       console.error(e);
-      setErr(e.message ?? "Upload failed");
-      setProgress(null);
-    } finally {
+      setErr(e.message ?? String(e));
       setBusy(false);
     }
   };
 
   return (
-    <div className="border rounded-2xl p-4">
-      <p className="font-medium mb-2">Upload invoice (PDF/JPG/PNG)</p>
+    <div className="border p-4 rounded-xl bg-white shadow-sm">
+      <h2 className="font-semibold mb-2">Upload Invoice</h2>
       <input
         type="file"
-        accept="application/pdf,image/*"
-        onChange={(e) => handleFiles(e.target.files)}
+        accept=".pdf,.png,.jpg,.jpeg,.txt"
         disabled={busy}
+        onChange={(e) => handleFiles(e.target.files)}
       />
-      {progress && <p className="text-sm mt-2">{progress}</p>}
-      {err && <p className="text-sm text-red-600 mt-2">{err}</p>}
-      <p className="text-xs text-gray-500 mt-2">
-        OCR runs in the browser. First page(s) of PDFs are rendered to images for scanning.
-      </p>
+      {progress && <p className="text-sm text-gray-600 mt-2">{progress}</p>}
+      {err && <p className="text-sm text-red-500 mt-2">{err}</p>}
     </div>
   );
 }
