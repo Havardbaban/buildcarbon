@@ -1,5 +1,15 @@
 import * as pdfjsLib from "pdfjs-dist";
-import "pdfjs-dist/build/pdf.worker.entry"; // important for Vite
+
+// Manually wire the pdf.js worker when running in the browser.  The previous
+// import ("pdfjs-dist/build/pdf.worker.entry") was removed in pdfjs-dist v4,
+// which caused the Vite build to fail on Vercel.  Using Vite's asset URL helper
+// ensures the worker bundle is emitted and the browser can fetch it at runtime.
+if (typeof window !== "undefined") {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.mjs",
+    import.meta.url,
+  ).toString();
+}
 
 export async function pdfToPngBlobs(file: File): Promise<Blob[]> {
   const arrayBuffer = await file.arrayBuffer();
