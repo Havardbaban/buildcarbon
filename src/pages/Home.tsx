@@ -1,11 +1,9 @@
 import { Link } from "react-router-dom";
-import Nav from "../components/Nav";
 import TestSupabase from "../TestSupabase";
 
 export default function Home() {
   return (
     <div>
-      <Nav />
 
       <main className="mx-auto max-w-6xl px-4 py-12">
         <section className="grid md:grid-cols-2 gap-10 items-center">
