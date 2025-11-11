@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
-import { parseInvoiceText } from "../lib/invoice-parser.ts"; // ✅ updated and explicit path
+import { parseInvoiceText } from "../lib/invoiceParser.ts"; // ✅ fix: correct import path for invoiceParser
 
 type Props = {
   onFinished?: () => void;
