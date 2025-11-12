@@ -7,49 +7,59 @@ export type ParsedInvoice = {
   total?: number;
   currency?: string;
   orgNumber?: string;
-
-  // quantities we can sometimes read:
-  energy_kwh?: number;   // electricity or district heat
-  fuel_liters?: number;  // diesel/petrol
-  gas_m3?: number;       // natural gas
-  co2_kg?: number;       // rough estimate from factors below
+  energy_kwh?: number;
+  fuel_liters?: number;
+  gas_m3?: number;
+  co2_kg?: number;
 };
 
-// ---- helpers --------------------------------------------------
+function normalizeText(raw: string) {
+  return raw
+    .replace(/\r/g, "")
+    .replace(/\u00A0/g, " "); // NBSP -> normal space
+}
 
-function cleanNumber(s: string): number | undefined {
-  // handle "12 345,67" and "12,345.67"
-  const x = s.replace(/\s/g, "").replace(/(\d)[.,](?=\d{3}\b)/g, "$1"); // drop thousands sep
-  const normalized = x.replace(",", "."); // decimal point
-  const n = Number(normalized);
+function parseScandiNumber(s: string): number | undefined {
+  // Remove spaces
+  let x = s.trim().replace(/\s/g, "");
+
+  // Cases:
+  //  - "9.969,00" (EU): dot thousands, comma decimals
+  //  - "9 969,00" (EU) -> handled by space removal, then comma decimals
+  //  - "9,969.00" (US): comma thousands, dot decimals
+  //  - "9969,00" or "9969.00"
+  // Decide by last separator:
+  const lastComma = x.lastIndexOf(",");
+  const lastDot = x.lastIndexOf(".");
+  if (lastComma > lastDot) {
+    // comma is decimal -> remove dots, switch comma to dot
+    x = x.replace(/\./g, "").replace(",", ".");
+  } else if (lastDot > lastComma) {
+    // dot is decimal -> remove commas
+    x = x.replace(/,/g, "");
+  } else {
+    // only digits (or weird) -> keep as-is
+  }
+  const n = Number(x);
   return Number.isFinite(n) ? n : undefined;
 }
 
-function first<T>(...vals: Array<T | undefined | null>): T | undefined {
-  for (const v of vals) if (v !== undefined && v !== null && `${v}`.trim() !== "") return v as T;
-  return undefined;
+function isMostlyDigits(s: string) {
+  const t = s.replace(/[\s.,:;/\-]/g, "");
+  if (!t) return false;
+  const digits = (t.match(/\d/g) || []).length;
+  return digits / t.length > 0.6;
 }
-
-// crude factors (kg CO2e / unit). Adjust later to your official set.
-const EF = {
-  electricity_kwh: 0.02,     // Norway grid very low; tune later
-  district_heat_kwh: 0.18,   // placeholder
-  diesel_l: 2.66,
-  petrol_l: 2.31,
-  natural_gas_m3: 2.00,
-};
-
-// ---- main -----------------------------------------------------
 
 export default async function parseInvoice(text: string): Promise<ParsedInvoice> {
   const out: ParsedInvoice = {};
-  const t = text.replace(/\r/g, "");
+  const t = normalizeText(text);
 
   // Currency
-  const currencyMatch = t.match(/\b(NOK|EUR|USD|SEK|DKK)\b/i);
-  out.currency = currencyMatch ? currencyMatch[1].toUpperCase() : "NOK";
+  const currency = t.match(/\b(NOK|EUR|USD|SEK|DKK)\b/i)?.[1]?.toUpperCase() ?? "NOK";
+  out.currency = currency;
 
-  // Date (YYYY-MM-DD or DD.MM.YYYY or DD/MM/YYYY)
+  // Date (YYYY-MM-DD or DD.MM.YYYY / DD/MM/YYYY)
   const dateISO =
     t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/)?.[0] ??
     (() => {
@@ -62,71 +72,55 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
 
   // Invoice number
   const invNum =
-    t.match(/Invoice\s*(?:No|Number|#)[:\s]*([A-Z0-9\-]+)/i)?.[1] ??
-    t.match(/Faktura\s*(?:nr|nummer|#)[:\s]*([A-Z0-9\-]+)/i)?.[1];
-  if (invNum) out.invoiceNumber = invNum.trim();
-
-  // Vendor (very heuristic): “Faktura fra X”, “Invoice from X”, or first line caps
-  const vendor =
-    t.match(/(?:Faktura|Invoice)\s+(?:fra|from)\s+([^\n\r]+)/i)?.[1] ??
-    t.split("\n").map(s => s.trim()).find(s => /^[A-ZÆØÅA-Z0-9 .,&'()/-]{3,}$/.test(s));
-  if (vendor) out.vendor = vendor.replace(/\s{2,}/g, " ").trim();
+    t.match(/(?:Invoice|Faktura)\s*(?:No|Nr|Number|#)\s*[:\-]?\s*([A-Z0-9\-]+)/i)?.[1];
+  if (invNum) out.invoiceNumber = invNum;
 
   // Org.nr
   const orgMatch = t.match(/Org\.?\s*nr\.?\s*[:\-]?\s*([\d\s]{7,})/i);
   if (orgMatch) out.orgNumber = orgMatch[1].replace(/\s/g, "");
 
-  // Total
-  const totalMatch =
-    t.match(/\b(Total(?:t)?|Amount\s*Due|Å\s*betale|Sum)\b[^\d\-]*([\d\s.,]+)\b/iu)?.[2] ??
-    t.match(/\bBetales\s*([0-9\s.,]+)\b/i)?.[1];
-  const total = totalMatch ? cleanNumber(totalMatch) : undefined;
-  if (total !== undefined) out.total = total;
-
-  // Quantities we can sometimes read
-  // Electricity / heat (kWh / MWh)
-  const energy = (() => {
-    const m = t.match(/([\d\s.,]+)\s*(kwh|mwh)\b/i);
-    if (!m) return undefined;
-    const n = cleanNumber(m[1]);
-    if (n === undefined) return undefined;
-    return m[2].toLowerCase() === "mwh" ? n * 1000 : n;
-  })();
-  if (energy !== undefined) out.energy_kwh = energy;
-
-  // Fuel liters (diesel/petrol)
-  const fuelLiters = (() => {
-    const m = t.match(/([\d\s.,]+)\s*(?:liter|l)\b.*\b(diesel|bensin|petrol|gasoline)?/i);
-    if (!m) return undefined;
-    const n = cleanNumber(m[1]);
-    return n;
-  })();
-  if (fuelLiters !== undefined) out.fuel_liters = fuelLiters;
-
-  // Gas m3
-  const gasM3 = (() => {
-    const m = t.match(/([\d\s.,]+)\s*(?:sm3|nm3|m3)\b.*\b(gass|gas)\b/i);
-    if (!m) return undefined;
-    const n = cleanNumber(m[1]);
-    return n;
-  })();
-  if (gasM3 !== undefined) out.gas_m3 = gasM3;
-
-  // CO2 estimate
-  let co2 = 0;
-  if (out.energy_kwh !== undefined) {
-    // try to detect district heating keywords
-    const isHeat = /fjernvarme|district\s*heat/i.test(t);
-    co2 += out.energy_kwh * (isHeat ? EF.district_heat_kwh : EF.electricity_kwh);
+  // Vendor (prefer labeled forms; else first non-numeric-looking title line)
+  const labeledVendor =
+    t.match(/(?:Leverandør|Fra|From|Utsteder|Issuer)\s*[:\-]?\s*([^\n\r]+)/i)?.[1];
+  if (labeledVendor && !isMostlyDigits(labeledVendor)) {
+    out.vendor = labeledVendor.trim();
+  } else {
+    const firstTitle = t
+      .split("\n")
+      .map((s) => s.trim())
+      .find((s) => s.length >= 3 && !isMostlyDigits(s) && /[A-Za-zÆØÅæøå]/.test(s));
+    if (firstTitle) out.vendor = firstTitle.replace(/\s{2,}/g, " ");
   }
-  if (out.fuel_liters !== undefined) {
-    // rough: if "diesel" present, use diesel factor; else petrol as fallback
-    const isDiesel = /\bdiesel\b/i.test(t);
-    co2 += out.fuel_liters * (isDiesel ? EF.diesel_l : EF.petrol_l);
+
+  // ---- TOTAL (robust) ----------------------------------------------------
+  // 1) Try “Total / Sum / Å betale / Beløp å betale / Amount due” nearby
+  const totalLabel = t.match(
+    /(Total(?:t)?|Sum|Å\s*betale|Beløp\s*å\s*betale|Amount\s*Due|Amount\s*to\s*Pay)[^\n\r]{0,40}?([\d\s.,]+)/i
+  );
+  let total: number | undefined;
+  if (totalLabel?.[2]) {
+    total = parseScandiNumber(totalLabel[2]);
   }
-  if (out.gas_m3 !== undefined) co2 += out.gas_m3 * EF.natural_gas_m3;
 
-  if (co2 > 0) out.co2_kg = Math.round(co2 * 1000) / 1000; // 3 decimals
+  // 2) Otherwise collect all NOK-looking amounts and pick the largest
+  if (total === undefined) {
+    const amounts: number[] = [];
+    const re = new RegExp(
+      // number optionally followed/preceded by NOK
+      `(?:NOK\\s*([\\d\\s.,]+)|([\\d\\s.,]+)\\s*NOK)`,
+      "gi"
+    );
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(t))) {
+      const raw = m[1] || m[2];
+      const n = raw ? parseScandiNumber(raw) : undefined;
+      if (n !== undefined) amounts.push(n);
+    }
+    if (amounts.length) total = Math.max(...amounts);
+  }
 
+  if (total !== undefined) out.total = Math.round(total * 100) / 100;
+
+  // --------- (leave CO2/energy hooks; you can extend later) ---------------
   return out;
 }
