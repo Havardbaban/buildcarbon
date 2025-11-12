@@ -71,7 +71,7 @@ export default function InvoiceUpload({ onFinished }: Props) {
       setProgress("Parsing fields...");
       const parsed = await parseInvoice(text);
 
-      // 4) Update row with parsed data (incl. energy/fuel/gas/CO2 if present)
+      // 4) Update row with parsed data
       setProgress("Saving data...");
       const updatePayload: Record<string, any> = {
         vendor: parsed.vendor ?? null,
@@ -80,10 +80,10 @@ export default function InvoiceUpload({ onFinished }: Props) {
         total: parsed.total ?? null,
         currency: parsed.currency ?? null,
         raw_text: text,
-        status: "parsed", // enum-safe value
+        status: "parsed",
       };
 
-      if ((parsed as any).orgNumber) updatePayload.org_number = (parsed as any).orgNumber;
+      if (parsed.orgNumber) updatePayload.org_number = parsed.orgNumber;
       if (parsed.energy_kwh !== undefined) updatePayload.energy_kwh = parsed.energy_kwh;
       if (parsed.fuel_liters !== undefined) updatePayload.fuel_liters = parsed.fuel_liters;
       if (parsed.gas_m3 !== undefined) updatePayload.gas_m3 = parsed.gas_m3;
