@@ -7,8 +7,6 @@ export type ParsedInvoice = {
   total?: number;
   currency?: string;
   orgNumber?: string;
-
-  // Hooks you can use later (kept for forward-compat)
   energy_kwh?: number;
   fuel_liters?: number;
   gas_m3?: number;
@@ -16,47 +14,31 @@ export type ParsedInvoice = {
 };
 
 function normalizeText(raw: string) {
-  return raw.replace(/\r/g, "").replace(/\u00A0/g, " "); // NBSP -> normal space
+  return raw.replace(/\r/g, "").replace(/\u00A0/g, " ");
 }
 
 /* ----------------------- Number helpers ----------------------- */
 
-// Parse a SINGLE token such as "9.969,00", "9 969,00", "9,969.00", "9969,00"
 function parseScandiNumberToken(s: string): number | undefined {
   let x = s.trim();
   if (!x) return undefined;
-
-  // drop spaces inside token
   x = x.replace(/\s+/g, "");
-
-  // decide decimal separator via last occurrence
   const lastComma = x.lastIndexOf(",");
   const lastDot = x.lastIndexOf(".");
-  if (lastComma > lastDot) {
-    // EU style: "." thousands, "," decimals
-    x = x.replace(/\./g, "").replace(",", ".");
-  } else if (lastDot > lastComma) {
-    // US style: "," thousands, "." decimals
-    x = x.replace(/,/g, "");
-  }
+  if (lastComma > lastDot) x = x.replace(/\./g, "").replace(",", ".");
+  else if (lastDot > lastComma) x = x.replace(/,/g, "");
   const n = Number(x);
   return Number.isFinite(n) ? n : undefined;
 }
 
-// Extract ALL numeric tokens from a chunk and parse them individually.
-// Remove zeros and duplicate values like "9.969,00 9.969,00".
 function pickNumbersFromChunk(chunk: string): number[] {
   const tokens = chunk.match(/[\d][\d\s.,]*/g) || [];
   const nums = tokens
     .map((tok) => parseScandiNumberToken(tok))
     .filter((n): n is number => typeof n === "number" && isFinite(n) && n > 0);
-
-  // de-duplicate exact repeats
   return Array.from(new Set(nums));
 }
 
-// Prefer the LAST parsed token on a “total” line (common layout). If that
-// doesn’t exist, fall back to the largest value.
 function pickOneFromChunk(chunk: string): number | undefined {
   const nums = pickNumbersFromChunk(chunk);
   if (!nums.length) return undefined;
@@ -77,7 +59,7 @@ function isMostlyDigits(s: string) {
 
 /* --------------------------- Parser --------------------------- */
 
-export default async function parseInvoice(text: string): Promise<ParsedInvoice> {
+export default async function parseInvoice(text: string) {
   const out: ParsedInvoice = {};
   const t = normalizeText(text);
   const lines = t.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -85,7 +67,7 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   // Currency
   out.currency = t.match(/\b(NOK|EUR|USD|SEK|DKK)\b/i)?.[1]?.toUpperCase() ?? "NOK";
 
-  // Date: YYYY-MM-DD OR DD.MM.YYYY / DD/MM/YYYY -> ISO
+  // Date (ISO)
   const dateISO =
     t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/)?.[0] ??
     (() => {
@@ -108,7 +90,6 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     /(faktura|invoice|fakturanr|fakturanummer|fakturadato|kid|iban|konto|account|ordre|referanse|ref\.)/i;
   const ADDRESSISH = /(vei|veien|gate|gt\.?|road|street|postboks|\b\d{4}\s+[A-Za-z])/i;
 
-  // 1) Prefer labeled lines
   const labeledVendor =
     t.match(/(?:Leverandør|Fra|From|Utsteder|Issuer|Selger)\s*[:\-]?\s*([^\n\r]+)/i)?.[1];
   if (
@@ -119,7 +100,6 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   ) {
     out.vendor = labeledVendor.replace(/\s{2,}/g, " ").trim();
   } else {
-    // 2) Look near Org.nr (previous 1–3 lines)
     let candidate: string | undefined;
     const orgIdx = lines.findIndex((ln) => /org\.?\s*nr/i.test(ln));
     if (orgIdx > 0) {
@@ -138,7 +118,6 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
         }
       }
     }
-    // 3) Fallback: first clean top line
     if (!candidate) {
       candidate = lines
         .slice(0, Math.min(15, lines.length))
@@ -175,7 +154,7 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     }
   }
 
-  // C) Else: scan lines with NOK/kr (ignore VAT/MVA lines), take largest token
+  // C) Lines that contain NOK/kr (ignore VAT)
   if (total === undefined) {
     const amounts: number[] = [];
     for (const ln of lines) {
@@ -186,6 +165,33 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     }
     const pick = safePickLargest(amounts);
     if (pick !== undefined) total = pick;
+  }
+
+  // D) FINAL FALLBACK: scan ALL lines, pick largest “money-looking” number
+  // (ignoring dates, KID/IBAN/account numbers, VAT/mva lines, long digit strings)
+  if (total === undefined) {
+    const amounts: number[] = [];
+    const BAD_LINE = /(mva|moms|vat|kid|iban|bic|kontonummer|konto\s*nr|konto:)/i;
+    const DATE_TOKEN = /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/;
+
+    for (const ln of lines) {
+      if (BAD_LINE.test(ln)) continue;
+      const tokens = ln.match(/[\d][\d\s.,]*/g) || [];
+      for (const tok of tokens) {
+        // skip very long digit blobs (likely account/KID)
+        const digitsOnly = tok.replace(/[^\d]/g, "");
+        if (digitsOnly.length >= 12) continue;
+        // skip date-like tokens
+        if (DATE_TOKEN.test(tok.trim())) continue;
+
+        const n = parseScandiNumberToken(tok);
+        if (typeof n === "number" && isFinite(n) && n > 0 && n < 1_000_000_000) {
+          amounts.push(n);
+        }
+      }
+    }
+    const pick2 = safePickLargest(amounts);
+    if (pick2 !== undefined) total = pick2;
   }
 
   if (total !== undefined) out.total = Math.round(total * 100) / 100;
