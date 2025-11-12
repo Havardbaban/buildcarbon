@@ -21,10 +21,8 @@ export default function InvoiceUpload({ onFinished }: Props) {
   }
 
   async function extractTextFromFile(file: File): Promise<string> {
-    // .txt files
     if (file.type === "text/plain") return await file.text();
 
-    // PDFs: convert pages to PNGs and OCR
     if (file.type === "application/pdf") {
       const pages = await pdfToPngBlobs(file);
       let combined = "";
@@ -35,13 +33,11 @@ export default function InvoiceUpload({ onFinished }: Props) {
       return combined.trim();
     }
 
-    // Images
     if (file.type.startsWith("image/")) {
       setProgress("Reading image...");
       return await ocrBlob(file);
     }
 
-    // Fallback try
     try {
       return await file.text();
     } catch {
@@ -79,17 +75,24 @@ export default function InvoiceUpload({ onFinished }: Props) {
 
       // 4) Update row with parsed data
       setProgress("Saving data...");
+      const updatePayload: Record<string, any> = {
+        vendor: parsed.vendor ?? null,
+        invoice_number: parsed.invoiceNumber ?? null,
+        date: parsed.dateISO ?? null,
+        total: parsed.total ?? null,
+        currency: parsed.currency ?? null,
+        raw_text: text,
+        status: "parsed", // enum-safe value
+      };
+
+      // only include if parser found it
+      if ((parsed as any).orgNumber) {
+        updatePayload.org_number = (parsed as any).orgNumber;
+      }
+
       const { error: updErr } = await supabase
         .from("invoices")
-        .update({
-          vendor: parsed.vendor ?? null,
-          invoice_number: parsed.invoiceNumber ?? null,
-          date: parsed.dateISO ?? null,
-          total: parsed.total ?? null,
-          currency: parsed.currency ?? null,
-          raw_text: text,
-          status: "done",
-        })
+        .update(updatePayload)
         .eq("id", rowId);
       if (updErr) throw updErr;
 
