@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import Tesseract from "tesseract.js";
 
-import supabase from "../lib/supabase";
+import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
 import parseInvoice from "../lib/invoiceParser";
 
