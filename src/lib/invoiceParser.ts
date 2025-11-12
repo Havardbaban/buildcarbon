@@ -17,9 +17,15 @@ function normalizeText(raw: string) {
   return raw.replace(/\r/g, "").replace(/\u00A0/g, " "); // NBSP -> space
 }
 
-// Robust number parser for NO/EU/US formats
-function parseScandiNumber(s: string): number | undefined {
-  let x = s.trim().replace(/\s/g, "");
+// --- number helpers --------------------------------------------------------
+
+function parseScandiNumberToken(s: string): number | undefined {
+  // parse a *single* token like "9.969,00" or "9,969.00" or "9969,00"
+  let x = s.trim();
+  if (!x) return undefined;
+  // drop spaces inside the token
+  x = x.replace(/\s+/g, "");
+
   const lastComma = x.lastIndexOf(",");
   const lastDot = x.lastIndexOf(".");
   if (lastComma > lastDot) {
@@ -31,6 +37,27 @@ function parseScandiNumber(s: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function pickNumbersFromChunk(chunk: string): number[] {
+  // find all numeric tokens in a chunk, parse each separately
+  const tokens = chunk.match(/[\d][\d\s.,]*/g) || [];
+  const nums = tokens
+    .map((tok) => parseScandiNumberToken(tok))
+    .filter((n): n is number => typeof n === "number" && isFinite(n));
+  return nums;
+}
+
+function pickOneFromChunk(chunk: string): number | undefined {
+  // prefer the LAST token on a total line (common layout), else the max
+  const nums = pickNumbersFromChunk(chunk);
+  if (!nums.length) return undefined;
+  return nums[nums.length - 1] ?? Math.max(...nums);
+}
+
+function safePickLargest(amounts: number[]) {
+  const filtered = amounts.filter((n) => n > 0 && n < 1_000_000_000);
+  return filtered.length ? Math.max(...filtered) : undefined;
+}
+
 function isMostlyDigits(s: string) {
   const t = s.replace(/[\s.,:;/\-]/g, "");
   if (!t) return false;
@@ -38,11 +65,7 @@ function isMostlyDigits(s: string) {
   return digits / t.length > 0.6;
 }
 
-function safePickLargest(amounts: number[]) {
-  // ignore clearly ridiculous amounts
-  const filtered = amounts.filter((n) => n > 0 && n < 1_000_000_000);
-  return filtered.length ? Math.max(...filtered) : undefined;
-}
+// --- main ------------------------------------------------------------------
 
 export default async function parseInvoice(text: string): Promise<ParsedInvoice> {
   const out: ParsedInvoice = {};
@@ -52,7 +75,7 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   // Currency
   out.currency = t.match(/\b(NOK|EUR|USD|SEK|DKK)\b/i)?.[1]?.toUpperCase() ?? "NOK";
 
-  // Date
+  // Date (YYYY-MM-DD or DD.MM.YYYY / DD/MM/YYYY)
   const dateISO =
     t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/)?.[0] ??
     (() => {
@@ -70,76 +93,86 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   const orgMatch = t.match(/Org\.?\s*nr\.?\s*[:\-]?\s*([\d\s]{7,})/i);
   if (orgMatch) out.orgNumber = orgMatch[1].replace(/\s/g, "");
 
-  // ---------------- VENDOR (improved) ----------------
-  // 1) Prefer labeled lines
+  // ---------------- VENDOR (stricter) ----------------
+  const BAD_VENDOR =
+    /(faktura|invoice|fakturanr|fakturanummer|fakturadato|kid|iban|konto|account|ordre|referanse|ref\.)/i;
+  const ADDRESSISH = /(vei|veien|gate|gt\.?|road|street|postboks|\b\d{4}\s+[A-Za-z])/i;
+
+  // 1) Labeled vendor
   const labeledVendor =
     t.match(/(?:Leverandør|Fra|From|Utsteder|Issuer|Selger)\s*[:\-]?\s*([^\n\r]+)/i)?.[1];
-  const BAD_VENDOR = /(faktura|invoice|fakturanr|fakturanummer|fakturadato|kid|iban|konto|account|ordre)/i;
-
-  if (labeledVendor && !BAD_VENDOR.test(labeledVendor) && !isMostlyDigits(labeledVendor)) {
+  if (
+    labeledVendor &&
+    !BAD_VENDOR.test(labeledVendor) &&
+    !isMostlyDigits(labeledVendor) &&
+    !ADDRESSISH.test(labeledVendor)
+  ) {
     out.vendor = labeledVendor.replace(/\s{2,}/g, " ").trim();
   } else {
-    // 2) Look near Org.nr (previous 1–2 lines)
+    // 2) Near Org.nr (previous 1–3 lines)
     let candidate: string | undefined;
     const orgIdx = lines.findIndex((ln) => /org\.?\s*nr/i.test(ln));
     if (orgIdx > 0) {
-      for (let i = Math.max(0, orgIdx - 2); i < orgIdx; i++) {
+      for (let i = Math.max(0, orgIdx - 3); i < orgIdx; i++) {
         const ln = lines[i];
-        if (!BAD_VENDOR.test(ln) && !isMostlyDigits(ln) && /[A-Za-zÆØÅæøå]/.test(ln)) {
+        if (
+          ln.length >= 3 &&
+          /[A-Za-zÆØÅæøå]/.test(ln) &&
+          !BAD_VENDOR.test(ln) &&
+          !ADDRESSISH.test(ln) &&
+          !isMostlyDigits(ln) &&
+          !/^(faktura|invoice)\b/i.test(ln)
+        ) {
           candidate = ln;
           break;
         }
       }
     }
-    // 3) Fallback: first non-numeric, non-"FAKTURA/INVOICE" title-ish line in the top block
+    // 3) Fallback: first clean top line
     if (!candidate) {
       candidate = lines
-        .slice(0, Math.min(12, lines.length))
+        .slice(0, Math.min(15, lines.length))
         .find(
           (ln) =>
             ln.length >= 3 &&
-            !isMostlyDigits(ln) &&
+            /[A-Za-zÆØÅæøå]/.test(ln) &&
             !BAD_VENDOR.test(ln) &&
+            !ADDRESSISH.test(ln) &&
+            !isMostlyDigits(ln) &&
             !/^(faktura|invoice)\b/i.test(ln)
         );
     }
     if (candidate) out.vendor = candidate.replace(/\s{2,}/g, " ").trim();
   }
 
-  // ---------------- TOTAL (improved) ----------------
+  // ---------------- TOTAL (handles duplicate tokens) ----------------
   let total: number | undefined;
 
-  // A) Try label on same line
+  // A) Label on same line
   const labelRe =
-    /(Total(?:t)?|Sum(?!\s*MVA)|Å\s*betale|Beløp\s*å\s*betale|Til\s*betaling|Amount\s*(?:Due|to\s*Pay)|Betales)\s*[:\-]?\s*([A-Z]*\s*[\d\s.,]+)(?:\s*(?:NOK|kr))?/iu;
+    /(Total(?:t)?|Sum(?!\s*MVA)|Å\s*betale|Beløp\s*å\s*betale|Til\s*betaling|Amount\s*(?:Due|to\s*Pay)|Betales)\s*[:\-]?\s*([^\n\r]+)/iu;
   const mSame = t.match(labelRe);
-  if (mSame?.[2]) total = parseScandiNumber(mSame[2]);
+  if (mSame?.[2]) total = pickOneFromChunk(mSame[2]);
 
-  // B) If not found, look for label then number on the *next* line
+  // B) Label on one line, number next line
   if (total === undefined) {
     for (let i = 0; i < lines.length - 1; i++) {
       if (labelRe.test(lines[i])) {
-        const nextNum = lines[i + 1].match(/([A-Z]*\s*[\d\s.,]+)(?:\s*(?:NOK|kr))?/i)?.[1];
-        if (nextNum) {
-          total = parseScandiNumber(nextNum);
-          if (total !== undefined) break;
-        }
+        const cand = lines[i + 1];
+        total = pickOneFromChunk(cand);
+        if (total !== undefined) break;
       }
     }
   }
 
-  // C) If still not found: collect all NOK/kr amounts and pick the largest, ignoring VAT rows
+  // C) Else: scan NOK/kr lines; ignore VAT/MVA lines; pick largest token
   if (total === undefined) {
     const amounts: number[] = [];
     for (const ln of lines) {
-      if (/mva|moms|vat/i.test(ln)) continue; // ignore tax lines
-      const rx = /(?:NOK|kr)\s*([\d\s.,]+)|([\d\s.,]+)\s*(?:NOK|kr)\b/gi;
-      let m: RegExpExecArray | null;
-      while ((m = rx.exec(ln))) {
-        const raw = m[1] || m[2];
-        const n = raw ? parseScandiNumber(raw) : undefined;
-        if (n !== undefined) amounts.push(n);
-      }
+      if (/mva|moms|vat/i.test(ln)) continue;
+      if (!/(?:NOK|kr)\b/i.test(ln)) continue;
+      const nums = pickNumbersFromChunk(ln);
+      amounts.push(...nums);
     }
     const pick = safePickLargest(amounts);
     if (pick !== undefined) total = pick;
