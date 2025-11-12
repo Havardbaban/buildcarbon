@@ -136,4 +136,5 @@ export default function InvoiceUpload({ onFinished }: Props) {
       {err && <p className="text-sm text-red-600 mt-2">{err}</p>}
     </div>
   );
+}
 
