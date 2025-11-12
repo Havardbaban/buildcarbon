@@ -1,4 +1,3 @@
-import Nav from "../components/Nav";
 import Hotspots from "../components/Hotspots";
 
 type Row = { sector: string; size: string; kwhPerM2: number; co2PerM2: number; note?: string };
