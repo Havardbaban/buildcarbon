@@ -1,63 +1,73 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { InvoiceRow } from "../types/invoice";
 
-export default function InvoiceTable({ refreshKey }: { refreshKey?: string }) {
-  const [rows, setRows] = useState<InvoiceRow[]>([]);
-  const [loading, setLoading] = useState(true);
+type Invoice = {
+  id: string;
+  date: string | null;
+  vendor: string | null;
+  total: number | null;
+  status: string;
+};
 
-  const load = async () => {
-    setLoading(true);
+export default function InvoiceTable({ refreshKey }: { refreshKey: string }) {
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+
+  async function fetchInvoices() {
     const { data, error } = await supabase
       .from("invoices")
       .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100);
-    if (!error && data) setRows(data as InvoiceRow[]);
-    setLoading(false);
-  };
+      .order("created_at", { ascending: false });
 
+    if (error) console.error(error);
+    else setInvoices(data || []);
+  }
+
+  // Fetch invoices on load + when refreshKey changes
   useEffect(() => {
-    load();
+    fetchInvoices();
   }, [refreshKey]);
 
-  if (loading) return <p>Loading invoices…</p>;
-  if (!rows.length) return <p>No invoices yet.</p>;
+  // 🔁 Realtime listener for live updates
+  useEffect(() => {
+    const channel = supabase
+      .channel("invoices-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "invoices" },
+        (payload) => {
+          console.log("Realtime change:", payload);
+          fetchInvoices(); // refresh data instantly
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-sm">
-        <thead>
-          <tr className="text-left border-b">
-            <th className="py-2 pr-4">Date</th>
-            <th className="py-2 pr-4">Vendor</th>
-            <th className="py-2 pr-4">Total (NOK)</th>
-            <th className="py-2 pr-4">CO₂ (kg)</th>
-            <th className="py-2 pr-4">Status</th>
-            <th className="py-2 pr-4">File</th>
+    <table className="w-full text-sm text-left border-collapse">
+      <thead>
+        <tr className="border-b">
+          <th className="p-2">Date</th>
+          <th className="p-2">Vendor</th>
+          <th className="p-2">Total (NOK)</th>
+          <th className="p-2">Status</th>
+          <th className="p-2">File</th>
+        </tr>
+      </thead>
+      <tbody>
+        {invoices.map((inv) => (
+          <tr key={inv.id} className="border-b">
+            <td className="p-2">{inv.date || "–"}</td>
+            <td className="p-2">{inv.vendor || "–"}</td>
+            <td className="p-2">{inv.total ?? "–"}</td>
+            <td className="p-2">{inv.status}</td>
+            <td className="p-2">{inv.filename || "–"}</td>
           </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id} className="border-b">
-              <td className="py-2 pr-4">{r.invoice_date ?? "–"}</td>
-              <td className="py-2 pr-4">{r.vendor ?? "–"}</td>
-              <td className="py-2 pr-4">{r.total_amount ?? "–"}</td>
-              <td className="py-2 pr-4">{r.co2_kg ?? "–"}</td>
-              <td className="py-2 pr-4">{r.status}</td>
-              <td className="py-2 pr-4">
-                {r.public_url ? (
-                  <a className="underline" href={r.public_url} target="_blank" rel="noreferrer">
-                    view
-                  </a>
-                ) : (
-                  "–"
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+        ))}
+      </tbody>
+    </table>
   );
 }
