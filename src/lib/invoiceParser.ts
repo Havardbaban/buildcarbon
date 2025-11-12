@@ -7,17 +7,11 @@ export type ParsedInvoice = {
   total?: number;
   currency?: string;
   orgNumber?: string;
-  energy_kwh?: number;
-  fuel_liters?: number;
-  gas_m3?: number;
-  co2_kg?: number;
 };
 
 function normalizeText(raw: string) {
   return raw.replace(/\r/g, "").replace(/\u00A0/g, " ");
 }
-
-/* ----------------------- Number helpers ----------------------- */
 
 function parseScandiNumberToken(s: string): number | undefined {
   let x = s.trim();
@@ -57,8 +51,6 @@ function isMostlyDigits(s: string) {
   return digits / t.length > 0.6;
 }
 
-/* --------------------------- Parser --------------------------- */
-
 export default async function parseInvoice(text: string) {
   const out: ParsedInvoice = {};
   const t = normalizeText(text);
@@ -67,7 +59,7 @@ export default async function parseInvoice(text: string) {
   // Currency
   out.currency = t.match(/\b(NOK|EUR|USD|SEK|DKK)\b/i)?.[1]?.toUpperCase() ?? "NOK";
 
-  // Date (ISO)
+  // Date
   const dateISO =
     t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/)?.[0] ??
     (() => {
@@ -85,7 +77,7 @@ export default async function parseInvoice(text: string) {
   const orgMatch = t.match(/Org\.?\s*nr\.?\s*[:\-]?\s*([\d\s]{7,})/i);
   if (orgMatch) out.orgNumber = orgMatch[1].replace(/\s/g, "");
 
-  /* ------------------------- Vendor (stricter) ------------------------- */
+  // Vendor
   const BAD_VENDOR =
     /(faktura|invoice|fakturanr|fakturanummer|fakturadato|kid|iban|konto|account|ordre|referanse|ref\.)/i;
   const ADDRESSISH = /(vei|veien|gate|gt\.?|road|street|postboks|\b\d{4}\s+[A-Za-z])/i;
@@ -100,8 +92,8 @@ export default async function parseInvoice(text: string) {
   ) {
     out.vendor = labeledVendor.replace(/\s{2,}/g, " ").trim();
   } else {
-    let candidate: string | undefined;
     const orgIdx = lines.findIndex((ln) => /org\.?\s*nr/i.test(ln));
+    let candidate: string | undefined;
     if (orgIdx > 0) {
       for (let i = Math.max(0, orgIdx - 3); i < orgIdx; i++) {
         const ln = lines[i];
@@ -120,7 +112,7 @@ export default async function parseInvoice(text: string) {
     }
     if (!candidate) {
       candidate = lines
-        .slice(0, Math.min(15, lines.length))
+        .slice(0, 15)
         .find(
           (ln) =>
             ln.length >= 3 &&
@@ -134,17 +126,16 @@ export default async function parseInvoice(text: string) {
     if (candidate) out.vendor = candidate.replace(/\s{2,}/g, " ").trim();
   }
 
-  /* ------------------------- Total (robust) ------------------------- */
-
+  // Total
   let total: number | undefined;
-
-  // A) Label and amount on the same line
   const labelRe =
     /(Total(?:t)?|Sum(?!\s*MVA)|Å\s*betale|Beløp\s*å\s*betale|Til\s*betaling|Amount\s*(?:Due|to\s*Pay)|Betales)\s*[:\-]?\s*([^\n\r]+)/iu;
+
+  // A) Label and amount on same line
   const mSame = t.match(labelRe);
   if (mSame?.[2]) total = pickOneFromChunk(mSame[2]);
 
-  // B) Label on one line, number on next line
+  // B) Label and number on next line
   if (total === undefined) {
     for (let i = 0; i < lines.length - 1; i++) {
       if (labelRe.test(lines[i])) {
@@ -154,7 +145,7 @@ export default async function parseInvoice(text: string) {
     }
   }
 
-  // C) Lines that contain NOK/kr (ignore VAT)
+  // C) NOK/kr lines (ignore MVA)
   if (total === undefined) {
     const amounts: number[] = [];
     for (const ln of lines) {
@@ -167,29 +158,25 @@ export default async function parseInvoice(text: string) {
     if (pick !== undefined) total = pick;
   }
 
-  // D) FINAL FALLBACK: scan ALL lines, pick largest “money-looking” number
-  // (ignoring dates, KID/IBAN/account numbers, VAT/mva lines, long digit strings)
+  // D) Final fallback: scan all lines, skip phone, account, and date-like tokens
   if (total === undefined) {
     const amounts: number[] = [];
-    const BAD_LINE = /(mva|moms|vat|kid|iban|bic|kontonummer|konto\s*nr|konto:)/i;
+    const BAD_LINE =
+      /(mva|moms|vat|kid|iban|bic|kontonummer|konto\s*nr|konto:|tlf|telefon|phone|ref\.)/i;
     const DATE_TOKEN = /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/;
 
     for (const ln of lines) {
       if (BAD_LINE.test(ln)) continue;
       const tokens = ln.match(/[\d][\d\s.,]*/g) || [];
       for (const tok of tokens) {
-        // skip very long digit blobs (likely account/KID)
         const digitsOnly = tok.replace(/[^\d]/g, "");
-        if (digitsOnly.length >= 12) continue;
-        // skip date-like tokens
+        if (digitsOnly.length >= 11) continue; // skip long account/KID/phone
         if (DATE_TOKEN.test(tok.trim())) continue;
-
         const n = parseScandiNumberToken(tok);
-        if (typeof n === "number" && isFinite(n) && n > 0 && n < 1_000_000_000) {
-          amounts.push(n);
-        }
+        if (n && n > 0 && n < 1_000_000_000) amounts.push(n);
       }
     }
+
     const pick2 = safePickLargest(amounts);
     if (pick2 !== undefined) total = pick2;
   }
