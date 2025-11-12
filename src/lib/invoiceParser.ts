@@ -7,6 +7,12 @@ export type ParsedInvoice = {
   total?: number;
   currency?: string;
   orgNumber?: string;
+
+  // NEW: activity + direct emissions (only set when confidently parsed)
+  energyKwh?: number;
+  fuelLiters?: number;
+  gasM3?: number;
+  co2Kg?: number;
 };
 
 function normalizeText(raw: string) {
@@ -22,20 +28,29 @@ function parseScandiNumberToken(s: string): number | undefined {
   const lastComma = x.lastIndexOf(",");
   const lastDot = x.lastIndexOf(".");
   if (lastComma > lastDot) {
+    // EU style: "." thousands, "," decimals
     x = x.replace(/\./g, "").replace(",", ".");
   } else if (lastDot > lastComma) {
+    // US style: "," thousands, "." decimals
     x = x.replace(/,/g, "");
   }
   const n = Number(x);
   return Number.isFinite(n) ? n : undefined;
 }
 
+// Detect Norwegian-style phone tokens like "23 29 20 00", "22-33-44-55", etc.
 function looksLikePhone(token: string): boolean {
   const raw = token.trim();
+  // if there is a decimal mark, it's not a phone
   if (/[.,]\d{1,2}$/.test(raw)) return false;
+
+  // Typical pattern: many pairs of 2 digits with spaces or hyphens
   if (/^(\d{2}[\s-]?){3,5}\d{2}$/.test(raw)) return true;
+
+  // Pure digits: 8 digits often phone
   const digitsOnly = raw.replace(/\D/g, "");
   if (digitsOnly.length === 8 && /^(\d{2}){4}$/.test(digitsOnly)) return true;
+
   return false;
 }
 
@@ -45,6 +60,7 @@ function tokensToNumbers(chunk: string): number[] {
     .filter((tok) => !looksLikePhone(tok))
     .map((tok) => parseScandiNumberToken(tok))
     .filter((n): n is number => typeof n === "number" && isFinite(n) && n > 0);
+  // de-duplicate
   return Array.from(new Set(nums));
 }
 
@@ -62,6 +78,7 @@ function lastTokenNumber(chunk: string): number | undefined {
 function plausibleAmount(n: number) {
   if (!Number.isFinite(n) || n <= 0) return false;
   if (n >= 50) return true;
+  // allow <50 only if non-integer (like 49,50)
   return Math.abs(n - Math.round(n)) > 1e-9;
 }
 
@@ -130,7 +147,7 @@ export default async function parseInvoice(text: string) {
 
   const BAD_PAGE = /(side\s*\d+\s*(?:av|of)\s*\d+)/i;
   const BAD_LINE =
-    /(kid|iban|bic|kontonummer|konto\s*nr|konto:|tlf|telefon|phone|ref\.)/i; // VAT handled separately
+    /(kid|iban|bic|kontonummer|konto\s*nr|konto:|tlf|telefon|phone|ref\.)/i; // VAT handled elsewhere
   const DATE_TOKEN = /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/;
 
   let total: number | undefined;
@@ -141,17 +158,13 @@ export default async function parseInvoice(text: string) {
     if (PAYABLE_FUZZY.test(ln)) {
       if (!BAD_PAGE.test(ln)) {
         const n1 = lastTokenNumber(ln);
-        if (typeof n1 === "number" && plausibleAmount(n1)) {
-          total = n1; break;
-        }
+        if (typeof n1 === "number" && plausibleAmount(n1)) { total = n1; break; }
       }
       if (i + 1 < lines.length) {
         const ln2 = lines[i + 1];
         if (!BAD_PAGE.test(ln2) && !/^\s*\d{1,2}\s*$/.test(ln2)) {
           const n2 = lastTokenNumber(ln2);
-          if (typeof n2 === "number" && plausibleAmount(n2)) {
-            total = n2; break;
-          }
+          if (typeof n2 === "number" && plausibleAmount(n2)) { total = n2; break; }
         }
       }
     }
@@ -161,10 +174,8 @@ export default async function parseInvoice(text: string) {
   if (total === undefined) {
     for (let i = 0; i < lines.length; i++) {
       if (SUM_INCL_MVA.test(lines[i])) {
-        // same line
         const n1 = lastTokenNumber(lines[i]);
         if (typeof n1 === "number" && plausibleAmount(n1)) { total = n1; break; }
-        // next line (choose last number)
         if (i + 1 < lines.length) {
           const nums = tokensToNumbers(lines[i + 1]);
           if (nums.length) {
@@ -176,7 +187,7 @@ export default async function parseInvoice(text: string) {
     }
   }
 
-  // 3) NOK/kr lines (ignore MVA/moms/VAT lines)
+  // 3) NOK/kr lines (ignore VAT/MVA)
   if (total === undefined) {
     for (const ln of lines) {
       if (/mva|moms|vat/i.test(ln)) continue;
@@ -189,7 +200,7 @@ export default async function parseInvoice(text: string) {
     }
   }
 
-  // 4) Final guarded fallback: only lines with money-ish keywords; still ignore phone/IDs/dates/pages
+  // 4) Guarded fallback: only "money-ish" lines; still filter dates/phones/IDs/pages
   if (total === undefined) {
     const MONEYISH = /(NOK|kr|sum|bel|betal|inkl\.?\s*mva)/i;
     for (const ln of lines) {
@@ -199,12 +210,10 @@ export default async function parseInvoice(text: string) {
       for (const tok of tokens) {
         if (looksLikePhone(tok)) continue;
         const digitsOnly = tok.replace(/[^\d]/g, "");
-        if (digitsOnly.length >= 11) continue;         // KID/IBAN/accounts
-        if (DATE_TOKEN.test(tok.trim())) continue;     // dates
+        if (digitsOnly.length >= 11) continue;          // KID/IBAN/accounts
+        if (DATE_TOKEN.test(tok.trim())) continue;      // dates
         const n = parseScandiNumberToken(tok);
-        if (typeof n === "number" && plausibleAmount(n)) {
-          total = n; break;
-        }
+        if (typeof n === "number" && plausibleAmount(n)) { total = n; break; }
       }
       if (total !== undefined) break;
     }
@@ -212,6 +221,58 @@ export default async function parseInvoice(text: string) {
 
   if (typeof total === "number") {
     out.total = Math.round(total * 100) / 100;
+  }
+
+  /* -------------------- Extract activity & direct CO2 -------------------- */
+
+  const BODY = t; // full normalized text
+
+  // Direct CO2(e): "1 234 kg CO2e", "2.3 t CO₂e", "CO2e: 123 kg"
+  {
+    const m =
+      BODY.match(/([\d][\d\s.,]*)\s*(kg|tonn|t)\s*CO(?:2|₂)e?/i) ||
+      BODY.match(/CO(?:2|₂)e?\s*[:\-]?\s*([\d][\d\s.,]*)\s*(kg|tonn|t)/i);
+    if (m) {
+      const raw = m[1];
+      const unit = m[2].toLowerCase();
+      const val = parseScandiNumberToken(raw);
+      if (val && isFinite(val)) {
+        out.co2Kg = unit === "kg" ? val : val * 1000; // t/tonn -> kg
+      }
+    }
+  }
+
+  // Electricity energy: kWh / MWh
+  {
+    const m1 =
+      BODY.match(/([\d][\d\s.,]*)\s*(?:kwh|kWt|kW\s*h)\b/i) ||
+      BODY.match(/([\d][\d\s.,]*)\s*MWh\b/i);
+    if (m1) {
+      const raw = m1[1];
+      const unit = (m1[0].match(/MWh|kWh|kWt|kW\s*h/i) || ["kWh"])[0].toLowerCase();
+      const val = parseScandiNumberToken(raw);
+      if (val && isFinite(val)) {
+        out.energyKwh = /mwh/.test(unit) ? val * 1000 : val;
+      }
+    }
+  }
+
+  // Fuel volume: liters (diesel/bensin). Detecting type happens outside if needed.
+  {
+    const m2 = BODY.match(/([\d][\d\s.,]*)\s*(?:l|liter|litre)\b/i);
+    if (m2) {
+      const val = parseScandiNumberToken(m2[1]);
+      if (val && isFinite(val)) out.fuelLiters = val;
+    }
+  }
+
+  // Gas volume: cubic meters (m3 / m³) – only if text suggests gas
+  {
+    const m3 = BODY.match(/([\d][\d\s.,]*)\s*(?:m3|m³)\b/i);
+    if (m3 && /gas|gass|naturgass|natural\s*gas/i.test(BODY)) {
+      const val = parseScandiNumberToken(m3[1]);
+      if (val && isFinite(val)) out.gasM3 = val;
+    }
   }
 
   return out;
