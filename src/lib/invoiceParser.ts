@@ -1,138 +1,192 @@
-// src/components/InvoiceUpload.tsx
-import React, { useState } from "react";
-import { v4 as uuidv4 } from "uuid";
-import Tesseract from "tesseract.js";
+// src/lib/invoiceParser.ts
+// Plain TypeScript helper — no JSX here.
 
-import { supabase } from "../lib/supabase";
-import { pdfToPngBlobs } from "../lib/pdfToImages";
-import parseInvoice from "../lib/invoiceParser";
-import estimateEmissions from "../lib/estimateEmissions";
+export type ParsedInvoice = {
+  vendor?: string | null;
+  invoiceNumber?: string | null;
+  dateISO?: string | null;
+  total?: number | null;
+  currency?: string | null;
+  orgNumber?: string | null;
 
-type Props = { onFinished?: () => void };
+  // Optional activity/emissions hints for later use
+  energyKwh?: number | null;
+  fuelLiters?: number | null;
+  gasM3?: number | null;
+  co2Kg?: number | null;
+};
 
-export default function InvoiceUpload({ onFinished }: Props) {
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+function toISODate(dmy: string | null): string | null {
+  if (!dmy) return null;
+  // dd.mm.yyyy or dd.mm.yy
+  const m = dmy.match(/(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})/);
+  if (!m) return null;
+  let [_, dd, mm, yyyy] = m;
+  if (yyyy.length === 2) {
+    // naive pivot
+    const two = parseInt(yyyy, 10);
+    yyyy = (two >= 70 ? "19" : "20") + yyyy;
+  }
+  const d = Number(dd), mth = Number(mm);
+  if (d < 1 || d > 31 || mth < 1 || mth > 12) return null;
+  return `${yyyy.padStart(4, "0")}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
 
-  async function ocrBlob(blob: Blob): Promise<string> {
-    const { data } = await Tesseract.recognize(blob, "eng");
-    return data.text ?? "";
+function parseMoney(n: string): number | null {
+  // Accept formats like 9.969,00  |  9 969,00  |  9969,00  |  9969.00  |  9,969.00
+  let s = n.trim();
+
+  // remove currency tokens
+  s = s.replace(/\b(NOK|kr|kr\.?)\b/gi, "").trim();
+
+  // normalize spaces
+  s = s.replace(/\s+/g, " ");
+
+  // If comma is decimal (common in NO): "9 969,00"
+  if (/,/.test(s) && /\d,\d{2}$/.test(s)) {
+    s = s.replace(/[ .]/g, ""); // remove spaces/dots (thousands)
+    s = s.replace(",", ".");    // decimal comma -> dot
+    const v = Number(s);
+    return Number.isFinite(v) ? v : null;
   }
 
-  async function extractTextFromFile(file: File): Promise<string> {
-    if (file.type === "text/plain") return await file.text();
+  // If dot is decimal: "9969.00" or "9,969.00"
+  s = s.replace(/,/g, ""); // remove thousands commas
+  const v = Number(s);
+  return Number.isFinite(v) ? v : null;
+}
 
-    if (file.type === "application/pdf") {
-      const pages = await pdfToPngBlobs(file);
-      let combined = "";
-      for (let i = 0; i < pages.length; i++) {
-        setProgress(`Reading page ${i + 1} of ${pages.length}...`);
-        combined += "\n" + (await ocrBlob(pages[i]));
-      }
-      return combined.trim();
-    }
-
-    if (file.type.startsWith("image/")) {
-      setProgress("Reading image...");
-      return await ocrBlob(file);
-    }
-
-    try {
-      return await file.text();
-    } catch {
-      throw new Error(`Unsupported file type: ${file.type || "unknown"}`);
-    }
-  }
-
-  const handleFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-
-    setBusy(true);
-    setErr(null);
-    setProgress("Starting...");
-
-    try {
-      const file = files[0];
-      const rowId = uuidv4();
-
-      // 1) Insert placeholder row
-      setProgress("Creating invoice record...");
-      const { error: insErr } = await supabase.from("invoices").insert({
-        id: rowId,
-        filename: file.name,
-        status: "processing",
-      });
-      if (insErr) throw insErr;
-
-      // 2) OCR / extract text
-      setProgress("Extracting text...");
-      const text = await extractTextFromFile(file);
-
-      // 3) Parse fields from text
-      setProgress("Parsing fields...");
-      const parsed = await parseInvoice(text);
-      // parsed fields you may get:
-      // parsed.vendor, parsed.invoiceNumber, parsed.dateISO, parsed.total, parsed.currency, parsed.orgNumber
-      // parsed.energyKwh, parsed.fuelLiters, parsed.gasM3, parsed.co2Kg (optional)
-
-      // 3.5) Estimate emissions from parsed values + full text
-      const est = estimateEmissions({ text, parsed });
-      // est can include: co2_kg, energy_kwh, fuel_liters, gas_m3
-
-      // If parser already found activity values but estimator didn't echo them back, carry them over
-      if (parsed.energyKwh != null && est.energy_kwh == null) est.energy_kwh = parsed.energyKwh;
-      if (parsed.fuelLiters != null && est.fuel_liters == null) est.fuel_liters = parsed.fuelLiters;
-      if (parsed.gasM3 != null && est.gas_m3 == null) est.gas_m3 = parsed.gasM3;
-
-      // 4) Update row with parsed + estimated data
-      setProgress("Saving data...");
-      const updatePayload: Record<string, any> = {
-        vendor: parsed.vendor ?? null,
-        invoice_number: parsed.invoiceNumber ?? null,
-        date: parsed.dateISO ?? null,
-        total: parsed.total ?? null,
-        currency: parsed.currency ?? null,
-        raw_text: text,
-        status: "parsed", // enum-safe
-        // emissions + activity (only include when present)
-        co2_kg: est.co2_kg ?? parsed.co2Kg ?? null,
-        energy_kwh: est.energy_kwh ?? null,
-        fuel_liters: est.fuel_liters ?? null,
-        gas_m3: est.gas_m3 ?? null,
-      };
-
-      if (parsed.orgNumber) updatePayload.org_number = parsed.orgNumber;
-
-      const { error: updErr } = await supabase
-        .from("invoices")
-        .update(updatePayload)
-        .eq("id", rowId);
-      if (updErr) throw updErr;
-
-      setProgress("Complete!");
-      setBusy(false);
-      onFinished?.();
-    } catch (e: any) {
-      console.error(e);
-      setErr(e?.message ?? "Unexpected error");
-      setBusy(false);
-    }
+export default async function parseInvoice(text: string): Promise<ParsedInvoice> {
+  const out: ParsedInvoice = {
+    vendor: null,
+    invoiceNumber: null,
+    dateISO: null,
+    total: null,
+    currency: "NOK",
+    orgNumber: null,
+    energyKwh: null,
+    fuelLiters: null,
+    gasM3: null,
+    co2Kg: null,
   };
 
-  return (
-    <div className="border p-4 rounded-xl bg-white shadow-sm">
-      <h2 className="font-semibold mb-2">Upload Invoice</h2>
+  if (!text) return out;
 
-      <input
-        type="file"
-        accept=".pdf,.png,.jpg,.jpeg,.webp,.txt"
-        disabled={busy}
-        onChange={(e) => handleFiles(e.target.files)}
-      />
+  // Preprocess
+  const raw = text.replace(/\u00A0/g, " ");
+  const lines = raw
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(Boolean);
 
-      {progress && <p className="text-sm text-gray-700 mt-2">{progress}</p>}
-      {err && <p className="text-sm text-red-600 mt-2">{err}</p>}
-    </div>
-  );
+  const full = lines.join("\n");
+
+  // ---------------------------
+  // Vendor (simple heuristics)
+  // ---------------------------
+  // Look for a company-ish line near the top (contains AS/ASA/A/S or capitalized words).
+  for (let i = 0; i < Math.min(15, lines.length); i++) {
+    const l = lines[i];
+    if (/(AS|ASA|A\/S)\b/.test(l)) {
+      // Avoid lines that are clearly address-only
+      if (!/vei|gate|gata|street|road|post|oslo|bergen|trondheim|stavanger/i.test(l)) {
+        out.vendor = l.replace(/\s{2,}/g, " ").trim();
+        break;
+      }
+    }
+  }
+  // Fallback: the first fully capitalized words line that looks like a name
+  if (!out.vendor) {
+    for (let i = 0; i < Math.min(10, lines.length); i++) {
+      const l = lines[i];
+      if (/[A-ZÆØÅ][A-Za-zÆØÅæøå0-9 .,&'-]{4,}/.test(l) && !/\d{2}\.\d{2}\.\d{2,4}/.test(l)) {
+        out.vendor = l.trim();
+        break;
+      }
+    }
+  }
+
+  // ---------------------------
+  // Invoice number
+  // ---------------------------
+  {
+    const m =
+      full.match(/(?:fakturanr\.?|faktura\s*nr\.?|invoice\s*no\.?|invoice\s*#|faktura)\s*[:\-]?\s*([A-Z0-9\-]{4,})/i) ||
+      full.match(/\bFAKTURA\s+([0-9]{4,})\b/i);
+    if (m) out.invoiceNumber = m[1];
+  }
+
+  // ---------------------------
+  // Date (dd.mm.yyyy common)
+  // ---------------------------
+  {
+    // Prefer “Fakturadato”/“Invoice date”
+    const dm =
+      full.match(/(fakturadato|invoice\s*date)\s*[:\-]?\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})/i) ||
+      full.match(/\b(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})\b/);
+    const dmy = dm ? (dm[2] || dm[1]) : null;
+    out.dateISO = toISODate(dmy || null);
+  }
+
+  // ---------------------------
+  // Org number (9 digits near "Org")
+  // ---------------------------
+  {
+    const om =
+      full.match(/Org(?:\.)?\s*(?:nr|no|nummer)?\s*[:\-]?\s*([0-9][0-9 ]{7,}[0-9])/i) ||
+      full.match(/\b([0-9]{3}\s?[0-9]{3}\s?[0-9]{3})\b/);
+    if (om) {
+      const digits = om[1].replace(/\s/g, "");
+      if (/^\d{9}$/.test(digits)) out.orgNumber = digits;
+    }
+  }
+
+  // ---------------------------
+  // Monetary total
+  // ---------------------------
+  // Heuristic: find lines containing keywords and a money pattern; otherwise pick the largest amount.
+  const moneyRegex = /(?:NOK|kr|kr\.|\b)\s*([0-9][0-9 .,\u00A0]{1,15}[0-9])(?!\d)/gi;
+
+  let best: number | null = null;
+  let fromKeywords = false;
+
+  for (const l of lines) {
+    const hasKeyword = /(beløp|betale|sum|total|inkl\.? mva|inkl\.?mva|sum inkl|amount|to pay|due)/i.test(l);
+    let m: RegExpExecArray | null;
+    while ((m = moneyRegex.exec(l))) {
+      const val = parseMoney(m[1]);
+      if (val == null) continue;
+      if (hasKeyword) {
+        if (best == null || val > best) {
+          best = val;
+          fromKeywords = true;
+        }
+      } else if (!fromKeywords) {
+        if (best == null || val > best) best = val;
+      }
+    }
+  }
+  if (best != null) out.total = best;
+
+  // ---------------------------
+  // Currency (default NOK if we saw NOK/kr anywhere)
+  // ---------------------------
+  if (/NOK|kr\b/i.test(full)) out.currency = "NOK";
+
+  // ---------------------------
+  // Activity hints (kWh, liters, m³)
+  // ---------------------------
+  {
+    // kWh
+    const km = full.match(/(\d[\d .,\u00A0]{0,12}\d)\s*kwh\b/i);
+    if (km) out.energyKwh = parseMoney(km[1]);
+    // liters
+    const lm = full.match(/(\d[\d .,\u00A0]{0,12}\d)\s*(?:l|litre|liter)\b/i);
+    if (lm) out.fuelLiters = parseMoney(lm[1]);
+    // m3 gas
+    const gm = full.match(/(\d[\d .,\u00A0]{0,12}\d)\s*(?:m3|m\u00B3)\b/i);
+    if (gm) out.gasM3 = parseMoney(gm[1]);
+  }
+
+  return out;
 }
