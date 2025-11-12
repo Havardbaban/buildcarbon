@@ -5,8 +5,11 @@ import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
 import parseInvoice from "../lib/invoiceParser";
+import estimateEmissions from "../lib/estimateEmissions";
 
-type Props = { onFinished?: () => void };
+type Props = {
+  onFinished?: () => void;
+};
 
 export default function InvoiceUpload({ onFinished }: Props) {
   const [busy, setBusy] = useState(false);
@@ -19,8 +22,12 @@ export default function InvoiceUpload({ onFinished }: Props) {
   }
 
   async function extractTextFromFile(file: File): Promise<string> {
-    if (file.type === "text/plain") return await file.text();
+    // Plain text
+    if (file.type === "text/plain") {
+      return await file.text();
+    }
 
+    // PDFs -> render pages to PNG blobs and OCR page-by-page
     if (file.type === "application/pdf") {
       const pages = await pdfToPngBlobs(file);
       let combined = "";
@@ -31,11 +38,13 @@ export default function InvoiceUpload({ onFinished }: Props) {
       return combined.trim();
     }
 
+    // Images (png/jpg/webp)
     if (file.type.startsWith("image/")) {
       setProgress("Reading image...");
       return await ocrBlob(file);
     }
 
+    // Fallback
     try {
       return await file.text();
     } catch {
@@ -43,7 +52,7 @@ export default function InvoiceUpload({ onFinished }: Props) {
     }
   }
 
-  const handleFiles = async (files: FileList | null) => {
+  async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
 
     setBusy(true);
@@ -54,7 +63,7 @@ export default function InvoiceUpload({ onFinished }: Props) {
       const file = files[0];
       const rowId = uuidv4();
 
-      // 1) Insert placeholder row
+      // 1) Create placeholder row
       setProgress("Creating invoice record...");
       const { error: insErr } = await supabase.from("invoices").insert({
         id: rowId,
@@ -63,15 +72,23 @@ export default function InvoiceUpload({ onFinished }: Props) {
       });
       if (insErr) throw insErr;
 
-      // 2) OCR / extract text
+      // 2) OCR
       setProgress("Extracting text...");
       const text = await extractTextFromFile(file);
 
-      // 3) Parse fields from text
+      // 3) Parse structured fields
       setProgress("Parsing fields...");
       const parsed = await parseInvoice(text);
 
-      // 4) Update row with parsed data
+      // 3.5) Estimate emissions (kWh/liters/m³ or direct CO₂)
+      const est = estimateEmissions({ text, parsed });
+
+      // ensure activity values are carried over if estimator didn’t echo them
+      if (parsed.energyKwh != null && est.energy_kwh == null) est.energy_kwh = parsed.energyKwh;
+      if (parsed.fuelLiters != null && est.fuel_liters == null) est.fuel_liters = parsed.fuelLiters;
+      if (parsed.gasM3 != null && est.gas_m3 == null) est.gas_m3 = parsed.gasM3;
+
+      // 4) Update the row with parsed + estimated data
       setProgress("Saving data...");
       const updatePayload: Record<string, any> = {
         vendor: parsed.vendor ?? null,
@@ -81,13 +98,12 @@ export default function InvoiceUpload({ onFinished }: Props) {
         currency: parsed.currency ?? null,
         raw_text: text,
         status: "parsed",
+        co2_kg: est.co2_kg ?? parsed.co2Kg ?? null,
+        energy_kwh: est.energy_kwh ?? null,
+        fuel_liters: est.fuel_liters ?? null,
+        gas_m3: est.gas_m3 ?? null,
       };
-
       if (parsed.orgNumber) updatePayload.org_number = parsed.orgNumber;
-      if (parsed.energy_kwh !== undefined) updatePayload.energy_kwh = parsed.energy_kwh;
-      if (parsed.fuel_liters !== undefined) updatePayload.fuel_liters = parsed.fuel_liters;
-      if (parsed.gas_m3 !== undefined) updatePayload.gas_m3 = parsed.gas_m3;
-      if (parsed.co2_kg !== undefined) updatePayload.co2_kg = parsed.co2_kg;
 
       const { error: updErr } = await supabase
         .from("invoices")
@@ -97,13 +113,13 @@ export default function InvoiceUpload({ onFinished }: Props) {
 
       setProgress("Complete!");
       setBusy(false);
-      onFinished?.();
+      if (onFinished) onFinished();
     } catch (e: any) {
       console.error(e);
       setErr(e?.message ?? "Unexpected error");
       setBusy(false);
     }
-  };
+  }
 
   return (
     <div className="border p-4 rounded-xl bg-white shadow-sm">
