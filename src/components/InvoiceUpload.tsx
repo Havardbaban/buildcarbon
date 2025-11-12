@@ -6,9 +6,7 @@ import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
 import parseInvoice from "../lib/invoiceParser";
 
-type Props = {
-  onFinished?: () => void;
-};
+type Props = { onFinished?: () => void };
 
 export default function InvoiceUpload({ onFinished }: Props) {
   const [busy, setBusy] = useState(false);
@@ -73,7 +71,7 @@ export default function InvoiceUpload({ onFinished }: Props) {
       setProgress("Parsing fields...");
       const parsed = await parseInvoice(text);
 
-      // 4) Update row with parsed data
+      // 4) Update row with parsed data (incl. energy/fuel/gas/CO2 if present)
       setProgress("Saving data...");
       const updatePayload: Record<string, any> = {
         vendor: parsed.vendor ?? null,
@@ -85,10 +83,11 @@ export default function InvoiceUpload({ onFinished }: Props) {
         status: "parsed", // enum-safe value
       };
 
-      // only include if parser found it
-      if ((parsed as any).orgNumber) {
-        updatePayload.org_number = (parsed as any).orgNumber;
-      }
+      if ((parsed as any).orgNumber) updatePayload.org_number = (parsed as any).orgNumber;
+      if (parsed.energy_kwh !== undefined) updatePayload.energy_kwh = parsed.energy_kwh;
+      if (parsed.fuel_liters !== undefined) updatePayload.fuel_liters = parsed.fuel_liters;
+      if (parsed.gas_m3 !== undefined) updatePayload.gas_m3 = parsed.gas_m3;
+      if (parsed.co2_kg !== undefined) updatePayload.co2_kg = parsed.co2_kg;
 
       const { error: updErr } = await supabase
         .from("invoices")
