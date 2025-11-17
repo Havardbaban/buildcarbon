@@ -141,32 +141,57 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     }
   }
 
-  // ---------------------------
+   // ---------------------------
   // Monetary total
   // ---------------------------
-  // Heuristic: find lines containing keywords and a money pattern; otherwise pick the largest amount.
-  const moneyRegex = /(?:NOK|kr|kr\.|\b)\s*([0-9][0-9 .,\u00A0]{1,15}[0-9])(?!\d)/gi;
 
+  // Lines that often contain long numbers we should ignore for totals
+  const BAD_LINE = /(kid|kid-?nummer|kontonummer|konto\.?nr|konto\s*nr|iban|swift|bank|kto\.?nr)/i;
+
+  // Strong keywords that usually mark the payable total
+  const STRONG_TOTAL = /(beløp\s*å\s*betale|belop\s*a\s*betale|amount\s*due|to\s*pay|sum\s*inkl\.?\s*mva|total\s*inkl\.?\s*mva|total\s*amount)/i;
+
+  // Generic money finder (captures the numeric part in group 1)
+  const MONEY = /(?:NOK|kr|kr\.)?\s*([0-9][0-9 .,\u00A0]{0,15}[0-9])(?:\b|$)/gi;
+
+  // Normalize (we already have lines[])
   let best: number | null = null;
-  let fromKeywords = false;
+  let fromStrong = false;
 
-  for (const l of lines) {
-    const hasKeyword = /(beløp|betale|sum|total|inkl\.? mva|inkl\.?mva|sum inkl|amount|to pay|due)/i.test(l);
+  function parseFirstMoneyIn(line: string): number | null {
     let m: RegExpExecArray | null;
-    while ((m = moneyRegex.exec(l))) {
+    while ((m = MONEY.exec(line))) {
       const val = parseMoney(m[1]);
       if (val == null) continue;
-      if (hasKeyword) {
-        if (best == null || val > best) {
-          best = val;
-          fromKeywords = true;
-        }
-      } else if (!fromKeywords) {
-        if (best == null || val > best) best = val;
+
+      // filter out obviously bogus totals (e.g. giant ID-like numbers)
+      if (val > 1_000_000) continue;
+
+      return val;
+    }
+    return null;
+  }
+
+  for (const l of lines) {
+    if (BAD_LINE.test(l)) continue; // skip bank/KID/etc
+    const strong = STRONG_TOTAL.test(l);
+    const val = parseFirstMoneyIn(l);
+    if (val == null) continue;
+
+    if (strong) {
+      // prefer strong markers like "Beløp å betale"
+      if (!fromStrong || (best != null && val !== best)) {
+        best = val;
+        fromStrong = true;
       }
+    } else if (!fromStrong) {
+      // only consider non-strong lines if we haven't found a strong one
+      if (best == null || val > best) best = val;
     }
   }
+
   if (best != null) out.total = best;
+
 
   // ---------------------------
   // Currency (default NOK if we saw NOK/kr anywhere)
