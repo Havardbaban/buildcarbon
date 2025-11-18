@@ -16,6 +16,14 @@ export type ParsedInvoice = {
   co2Kg?: number | null;
 };
 
+// Simple placeholder emission factors for whole-invoice hints.
+// You can later replace these with values loaded from the database.
+const EMISSION_FACTORS = {
+  ELECTRICITY_PER_KWH: 0.05, // kg CO2e per kWh (placeholder)
+  DIESEL_PER_LITER: 2.68,    // kg CO2e per liter (placeholder)
+  GAS_PER_M3: 2.0,           // kg CO2e per m3 (placeholder)
+};
+
 function toISODate(dmy: string | null): string | null {
   if (!dmy) return null;
   // dd.mm.yyyy or dd.mm.yy
@@ -54,6 +62,29 @@ function parseMoney(n: string): number | null {
   s = s.replace(/,/g, ""); // remove thousands commas
   const v = Number(s);
   return Number.isFinite(v) ? v : null;
+}
+
+// New helper: compute a rough CO2 value from the activity hints
+function estimateCo2FromHints(hints: {
+  energyKwh?: number | null;
+  fuelLiters?: number | null;
+  gasM3?: number | null;
+}): number | null {
+  let total = 0;
+
+  if (hints.energyKwh && hints.energyKwh > 0) {
+    total += hints.energyKwh * EMISSION_FACTORS.ELECTRICITY_PER_KWH;
+  }
+
+  if (hints.fuelLiters && hints.fuelLiters > 0) {
+    total += hints.fuelLiters * EMISSION_FACTORS.DIESEL_PER_LITER;
+  }
+
+  if (hints.gasM3 && hints.gasM3 > 0) {
+    total += hints.gasM3 * EMISSION_FACTORS.GAS_PER_M3;
+  }
+
+  return total > 0 ? total : null;
 }
 
 export default async function parseInvoice(text: string): Promise<ParsedInvoice> {
@@ -141,7 +172,7 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     }
   }
 
-   // ---------------------------
+  // ---------------------------
   // Monetary total
   // ---------------------------
 
@@ -192,7 +223,6 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
 
   if (best != null) out.total = best;
 
-
   // ---------------------------
   // Currency (default NOK if we saw NOK/kr anywhere)
   // ---------------------------
@@ -212,6 +242,15 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     const gm = full.match(/(\d[\d .,\u00A0]{0,12}\d)\s*(?:m3|m\u00B3)\b/i);
     if (gm) out.gasM3 = parseMoney(gm[1]);
   }
+
+  // ---------------------------
+  // Estimate CO2 from hints
+  // ---------------------------
+  out.co2Kg = estimateCo2FromHints({
+    energyKwh: out.energyKwh ?? null,
+    fuelLiters: out.fuelLiters ?? null,
+    gasM3: out.gasM3 ?? null,
+  });
 
   return out;
 }
