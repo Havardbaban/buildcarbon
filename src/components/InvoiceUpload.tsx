@@ -1,6 +1,6 @@
 // src/lib/processInvoiceUpload.ts
 
-import parseInvoice from "./invoiceParser";
+import parseInvoice from "../lib/invoiceParser";
 import { saveDocumentLinesWithCo2, RawInvoiceLine } from "./saveDocumentLinesWithCo2";
 
 export type ProcessInvoiceArgs = {
