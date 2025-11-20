@@ -1,7 +1,7 @@
 // src/lib/processInvoiceUpload.ts
 
 import parseInvoice from "../lib/invoiceParser";
-import { saveDocumentLinesWithCo2 } from "../lib/saveDocumentLinesWithCo2";
+import type { RawInvoiceLine } from "./saveDocumentLinesWithCo2";
 
 export type ProcessInvoiceArgs = {
   supabase: any;               // Supabase server client
