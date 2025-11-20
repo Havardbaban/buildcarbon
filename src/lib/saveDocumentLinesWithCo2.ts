@@ -8,8 +8,7 @@ type EmissionFactorRow = {
   id: string;
   name: string;
   product_category_id: string | null;
-  unit: string | null;
-  co2_per_unit: number | null;
+  co2_per_unit_kg: number | null;   // <-- matches your table column
   source?: string | null;
 };
 
@@ -47,10 +46,11 @@ export async function saveDocumentLinesWithCo2(
   if (!documentId) throw new Error("documentId is required");
   if (!lines || lines.length === 0) return;
 
-  // Load emission factors once
+  // Load emission factors once.
+  // We only select columns that we know exist in your table.
   const { data: factors, error: factorsError } = await supabase
     .from("emission_factor")
-    .select<EmissionFactorRow[]>("id, name, product_category_id, unit, co2_per_unit, source");
+    .select<EmissionFactorRow[]>("id, name, product_category_id, co2_per_unit_kg, source");
 
   if (factorsError) {
     console.error("Failed to fetch emission_factor rows:", factorsError);
@@ -70,8 +70,8 @@ export async function saveDocumentLinesWithCo2(
 
     const ef = pickFactor(factors || [], line.description);
 
-    if (ef && quantity != null && ef.co2_per_unit != null) {
-      co2_kg = quantity * ef.co2_per_unit;
+    if (ef && quantity != null && ef.co2_per_unit_kg != null) {
+      co2_kg = quantity * ef.co2_per_unit_kg;
       co2_source = ef.source ?? `Generic factor: ${ef.name}`;
       product_category_id = ef.product_category_id;
       emission_factor_id = ef.id;
@@ -80,12 +80,12 @@ export async function saveDocumentLinesWithCo2(
     rowsToInsert.push({
       document_id: documentId,
 
-      // legacy invoice columns
+      // basic invoice columns
       description: line.description,
       quantity,
       unit: unitNormalized ?? line.unitRaw ?? null,
 
-      // New normalized / CO2 columns (if they exist in the table)
+      // normalized fields (your table may ignore extra columns if they don't exist)
       unit_raw: line.unitRaw ?? null,
       unit_normalized: unitNormalized,
       quantity_normalized: quantity,
