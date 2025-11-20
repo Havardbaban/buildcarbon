@@ -9,7 +9,8 @@ export default function Nav() {
   return (
     <header className="border-b border-slate-200 bg-white">
       <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
-        {/* Left: logo / brand */}
+        
+        {/* Logo / Brand */}
         <Link to="/" className="flex items-center gap-2">
           <div className="h-8 w-8 rounded-full bg-green-600 flex items-center justify-center text-white text-xs font-bold">
             E
@@ -19,7 +20,7 @@ export default function Nav() {
           </span>
         </Link>
 
-        {/* Right: nav links */}
+        {/* Navigation Links */}
         <nav className="flex items-center gap-4">
           <NavLink
             to="/"
@@ -57,7 +58,7 @@ export default function Nav() {
             Invoices
           </NavLink>
 
-          {/* ✅ NEW: Measures link */}
+          {/* ✅ NEW LINK */}
           <NavLink
             to="/measures"
             className={({ isActive }) =>
