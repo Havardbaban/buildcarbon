@@ -3,19 +3,20 @@
 import { enrichLineWithCo2, LineInput } from "./classifyLineItem";
 
 export type RawInvoiceLine = {
+  // we keep these for classification/CO2, but we won't store description yet
   description: string | null;
   quantity: number | null;
   unitRaw?: string | null;   // e.g. "stk", "kg", "l"
-  amountNok?: number | null; // NOT used yet – keeping for future
+  amountNok?: number | null; // kept for later use
 };
 
 /**
  * Save multiple lines for one document into the `document_line` table,
- * automatically calculating CO2 and filling ONLY the columns we know
- * match the schema safely.
+ * automatically calculating CO2 and filling ONLY the CO2-related columns
+ * that we know match the schema.
  *
- * We intentionally do NOT touch legacy numeric columns like `quantity`,
- * `net_amount`, `vat_amount` until we’ve confirmed their types.
+ * IMPORTANT: we deliberately do NOT insert `description` or any legacy
+ * numeric fields right now, to avoid type mismatches in the existing schema.
  */
 export async function saveDocumentLinesWithCo2(
   supabase: any,
@@ -41,10 +42,10 @@ export async function saveDocumentLinesWithCo2(
     toInsert.push({
       document_id: documentId,
 
-      // keep description only, avoid touching any numeric legacy cols:
-      description: line.description,
+      // ⚠️ NO `description` here for now
+      // ⚠️ NO `quantity`, `net_amount`, `vat_amount`, etc.
 
-      // NEW CO2-related fields (these match the columns we added):
+      // Only new CO2-related fields:
       unit_raw: enriched.unitRaw,
       unit_normalized: enriched.unitNormalized,
       quantity_normalized: enriched.quantityNormalized,
