@@ -40,8 +40,6 @@ export default function InvoicesSection() {
     loadInvoices();
   }, []);
 
-  // --- helpers -------------------------------------------------------------
-
   const formatAmount = (value: number | null | undefined) => {
     if (value === null || value === undefined) return '—';
     return value.toLocaleString('nb-NO', {
@@ -65,25 +63,13 @@ export default function InvoicesSection() {
     return d.toLocaleDateString('nb-NO');
   };
 
-  // --- aggregates ----------------------------------------------------------
-
   const invoiceCount = invoices.length;
 
-  const totalAmount = invoices.reduce((sum, inv) => {
-    return sum + (inv.total ?? 0);
-  }, 0);
-
-  const totalCO2 = invoices.reduce((sum, inv) => {
-    return sum + (inv.total_co2_kg ?? 0);
-  }, 0);
-
-  const totalFuelLiters = invoices.reduce((sum, inv) => {
-    return sum + (inv.fuel_liters ?? 0);
-  }, 0);
+  const totalAmount = invoices.reduce((sum, inv) => sum + (inv.total ?? 0), 0);
+  const totalCO2 = invoices.reduce((sum, inv) => sum + (inv.total_co2_kg ?? 0), 0);
+  const totalFuelLiters = invoices.reduce((sum, inv) => sum + (inv.fuel_liters ?? 0), 0);
 
   const currency = invoices[0]?.currency ?? 'NOK';
-
-  // --- render --------------------------------------------------------------
 
   return (
     <section className="w-full max-w-5xl mx-auto mt-10 space-y-6">
@@ -91,7 +77,6 @@ export default function InvoicesSection() {
         Invoices & CO₂
       </h2>
 
-      {/* summary cards */}
       <div className="grid gap-4 md:grid-cols-3">
         <div className="rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
           <p className="text-xs font-medium uppercase text-slate-500">
@@ -122,7 +107,6 @@ export default function InvoicesSection() {
         </div>
       </div>
 
-      {/* table */}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50">
@@ -157,38 +141,23 @@ export default function InvoicesSection() {
               </tr>
             )}
 
-            {!loading && invoices.length === 0 && (
-              <tr>
-                <td
-                  colSpan={5}
-                  className="px-6 py-6 text-center text-slate-500"
-                >
-                  No invoices yet.
-                </td>
-              </tr>
-            )}
-
             {!loading &&
-              invoices.map((invoice) => (
+              invoices.map((inv) => (
                 <tr
-                  key={invoice.id}
-                  className="border-t border-slate-100 cursor-pointer hover:bg-slate-50"
-                  onClick={() => router.push(`/invoice/${invoice.id}`)}
+                  key={inv.id}
+                  onClick={() => router.push(`/invoice/${inv.id}`)}
+                  className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer"
                 >
-                  <td className="px-6 py-3 text-xs text-slate-600">
-                    {invoice.id}
+                  <td className="px-6 py-3 text-xs text-slate-600">{inv.id}</td>
+                  <td className="px-6 py-3">{formatDate(inv.invoice_date)}</td>
+                  <td className="px-6 py-3 text-right">
+                    {formatAmount(inv.total)}
                   </td>
-                  <td className="px-6 py-3 text-sm text-slate-800">
-                    {formatDate(invoice.invoice_date)}
+                  <td className="px-6 py-3 text-right">
+                    {formatCO2(inv.total_co2_kg)}
                   </td>
-                  <td className="px-6 py-3 text-sm text-right text-slate-800">
-                    {formatAmount(invoice.total)}
-                  </td>
-                  <td className="px-6 py-3 text-sm text-right text-slate-800">
-                    {formatCO2(invoice.total_co2_kg)}
-                  </td>
-                  <td className="px-6 py-3 text-sm text-right text-slate-800">
-                    {formatAmount(invoice.fuel_liters)}
+                  <td className="px-6 py-3 text-right">
+                    {formatAmount(inv.fuel_liters)}
                   </td>
                 </tr>
               ))}
