@@ -1,6 +1,13 @@
 // src/lib/invoiceParser.ts
 // Plain TypeScript helper — no JSX here.
 
+export type ParsedInvoiceLine = {
+  description: string;
+  quantity: number | null;
+  unitRaw: string | null;
+  amountNok: number | null;
+};
+
 export type ParsedInvoice = {
   vendor?: string | null;
   invoiceNumber?: string | null;
@@ -9,19 +16,14 @@ export type ParsedInvoice = {
   currency?: string | null;
   orgNumber?: string | null;
 
-  // Optional activity/emissions hints for later use
+  // Activity / emissions hints
   energyKwh?: number | null;
   fuelLiters?: number | null;
   gasM3?: number | null;
   co2Kg?: number | null;
-};
 
-// Simple placeholder emission factors for whole-invoice hints.
-// You can later replace these with values loaded from the database.
-const EMISSION_FACTORS = {
-  ELECTRICITY_PER_KWH: 0.05, // kg CO2e per kWh (placeholder)
-  DIESEL_PER_LITER: 2.68,    // kg CO2e per liter (placeholder)
-  GAS_PER_M3: 2.0,           // kg CO2e per m3 (placeholder)
+  // Parsed line items
+  lines: ParsedInvoiceLine[];
 };
 
 function toISODate(dmy: string | null): string | null {
@@ -31,7 +33,6 @@ function toISODate(dmy: string | null): string | null {
   if (!m) return null;
   let [_, dd, mm, yyyy] = m;
   if (yyyy.length === 2) {
-    // naive pivot
     const two = parseInt(yyyy, 10);
     yyyy = (two >= 70 ? "19" : "20") + yyyy;
   }
@@ -41,50 +42,44 @@ function toISODate(dmy: string | null): string | null {
 }
 
 function parseMoney(n: string): number | null {
-  // Accept formats like 9.969,00  |  9 969,00  |  9969,00  |  9969.00  |  9,969.00
   let s = n.trim();
 
   // remove currency tokens
   s = s.replace(/\b(NOK|kr|kr\.?)\b/gi, "").trim();
-
-  // normalize spaces
   s = s.replace(/\s+/g, " ");
 
-  // If comma is decimal (common in NO): "9 969,00"
+  // If comma is decimal (common NO)
   if (/,/.test(s) && /\d,\d{2}$/.test(s)) {
-    s = s.replace(/[ .]/g, ""); // remove spaces/dots (thousands)
-    s = s.replace(",", ".");    // decimal comma -> dot
+    s = s.replace(/[ .]/g, "");
+    s = s.replace(",", ".");
     const v = Number(s);
     return Number.isFinite(v) ? v : null;
   }
 
-  // If dot is decimal: "9969.00" or "9,969.00"
-  s = s.replace(/,/g, ""); // remove thousands commas
+  // Dot decimal
+  s = s.replace(/,/g, "");
   const v = Number(s);
   return Number.isFinite(v) ? v : null;
 }
 
-// New helper: compute a rough CO2 value from the activity hints
-function estimateCo2FromHints(hints: {
-  energyKwh?: number | null;
-  fuelLiters?: number | null;
-  gasM3?: number | null;
-}): number | null {
-  let total = 0;
+// Very simple integer parser for quantities
+function parseQuantity(q: string): number | null {
+  let s = q.trim();
+  s = s.replace(/\s+/g, "");
+  s = s.replace(",", ".");
+  const v = Number(s);
+  if (!Number.isFinite(v)) return null;
+  return v;
+}
 
-  if (hints.energyKwh && hints.energyKwh > 0) {
-    total += hints.energyKwh * EMISSION_FACTORS.ELECTRICITY_PER_KWH;
-  }
-
-  if (hints.fuelLiters && hints.fuelLiters > 0) {
-    total += hints.fuelLiters * EMISSION_FACTORS.DIESEL_PER_LITER;
-  }
-
-  if (hints.gasM3 && hints.gasM3 > 0) {
-    total += hints.gasM3 * EMISSION_FACTORS.GAS_PER_M3;
-  }
-
-  return total > 0 ? total : null;
+function normalizeUnit(u: string | null): string | null {
+  if (!u) return null;
+  const x = u.toLowerCase();
+  if (x === "l" || x.startsWith("liter") || x.startsWith("litre")) return "liter";
+  if (x === "stk" || x === "st" || x === "pcs" || x === "pc") return "piece";
+  if (x === "kg") return "kg";
+  if (x === "m3" || x === "m³") return "m3";
+  return x;
 }
 
 export default async function parseInvoice(text: string): Promise<ParsedInvoice> {
@@ -99,11 +94,11 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     fuelLiters: null,
     gasM3: null,
     co2Kg: null,
+    lines: [],
   };
 
   if (!text) return out;
 
-  // Preprocess
   const raw = text.replace(/\u00A0/g, " ");
   const lines = raw
     .split(/\r?\n/)
@@ -113,25 +108,13 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   const full = lines.join("\n");
 
   // ---------------------------
-  // Vendor (simple heuristics)
+  // Vendor heuristic
   // ---------------------------
-  // Look for a company-ish line near the top (contains AS/ASA/A/S or capitalized words).
   for (let i = 0; i < Math.min(15, lines.length); i++) {
     const l = lines[i];
     if (/(AS|ASA|A\/S)\b/.test(l)) {
-      // Avoid lines that are clearly address-only
       if (!/vei|gate|gata|street|road|post|oslo|bergen|trondheim|stavanger/i.test(l)) {
         out.vendor = l.replace(/\s{2,}/g, " ").trim();
-        break;
-      }
-    }
-  }
-  // Fallback: the first fully capitalized words line that looks like a name
-  if (!out.vendor) {
-    for (let i = 0; i < Math.min(10, lines.length); i++) {
-      const l = lines[i];
-      if (/[A-ZÆØÅ][A-Za-zÆØÅæøå0-9 .,&'-]{4,}/.test(l) && !/\d{2}\.\d{2}\.\d{2,4}/.test(l)) {
-        out.vendor = l.trim();
         break;
       }
     }
@@ -148,10 +131,9 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   }
 
   // ---------------------------
-  // Date (dd.mm.yyyy common)
+  // Date
   // ---------------------------
   {
-    // Prefer “Fakturadato”/“Invoice date”
     const dm =
       full.match(/(fakturadato|invoice\s*date)\s*[:\-]?\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})/i) ||
       full.match(/\b(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})\b/);
@@ -160,7 +142,7 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   }
 
   // ---------------------------
-  // Org number (9 digits near "Org")
+  // Org number (9 digits)
   // ---------------------------
   {
     const om =
@@ -175,17 +157,10 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   // ---------------------------
   // Monetary total
   // ---------------------------
-
-  // Lines that often contain long numbers we should ignore for totals
   const BAD_LINE = /(kid|kid-?nummer|kontonummer|konto\.?nr|konto\s*nr|iban|swift|bank|kto\.?nr)/i;
-
-  // Strong keywords that usually mark the payable total
-  const STRONG_TOTAL = /(beløp\s*å\s*betale|belop\s*a\s*betale|amount\s*due|to\s*pay|sum\s*inkl\.?\s*mva|total\s*inkl\.?\s*mva|total\s*amount)/i;
-
-  // Generic money finder (captures the numeric part in group 1)
+  const STRONG_TOTAL = /(beløp\s*å\s*betale|belop\s*a\s*betale|amount\s*due|to\s*pay|sum\s*inkl\.?\s*mva|total\s*inkl\.?\s*mva|total\s*amount|^total\b)/i;
   const MONEY = /(?:NOK|kr|kr\.)?\s*([0-9][0-9 .,\u00A0]{0,15}[0-9])(?:\b|$)/gi;
 
-  // Normalize (we already have lines[])
   let best: number | null = null;
   let fromStrong = false;
 
@@ -194,63 +169,83 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     while ((m = MONEY.exec(line))) {
       const val = parseMoney(m[1]);
       if (val == null) continue;
-
-      // filter out obviously bogus totals (e.g. giant ID-like numbers)
-      if (val > 1_000_000) continue;
-
+      if (val > 1_000_000_000) continue;
       return val;
     }
     return null;
   }
 
   for (const l of lines) {
-    if (BAD_LINE.test(l)) continue; // skip bank/KID/etc
+    if (BAD_LINE.test(l)) continue;
     const strong = STRONG_TOTAL.test(l);
     const val = parseFirstMoneyIn(l);
     if (val == null) continue;
 
     if (strong) {
-      // prefer strong markers like "Beløp å betale"
       if (!fromStrong || (best != null && val !== best)) {
         best = val;
         fromStrong = true;
       }
     } else if (!fromStrong) {
-      // only consider non-strong lines if we haven't found a strong one
       if (best == null || val > best) best = val;
     }
   }
 
   if (best != null) out.total = best;
-
-  // ---------------------------
-  // Currency (default NOK if we saw NOK/kr anywhere)
-  // ---------------------------
   if (/NOK|kr\b/i.test(full)) out.currency = "NOK";
 
   // ---------------------------
   // Activity hints (kWh, liters, m³)
   // ---------------------------
   {
-    // kWh
     const km = full.match(/(\d[\d .,\u00A0]{0,12}\d)\s*kwh\b/i);
     if (km) out.energyKwh = parseMoney(km[1]);
-    // liters
     const lm = full.match(/(\d[\d .,\u00A0]{0,12}\d)\s*(?:l|litre|liter)\b/i);
     if (lm) out.fuelLiters = parseMoney(lm[1]);
-    // m3 gas
     const gm = full.match(/(\d[\d .,\u00A0]{0,12}\d)\s*(?:m3|m\u00B3)\b/i);
     if (gm) out.gasM3 = parseMoney(gm[1]);
   }
 
-  // ---------------------------
-  // Estimate CO2 from hints
-  // ---------------------------
-  out.co2Kg = estimateCo2FromHints({
-    energyKwh: out.energyKwh ?? null,
-    fuelLiters: out.fuelLiters ?? null,
-    gasM3: out.gasM3 ?? null,
-  });
+  // Rough CO2 estimate from fuel
+  if (out.fuelLiters != null) {
+    // Diesel ~ 2.68 kg CO₂ per liter (rough generic factor)
+    out.co2Kg = out.fuelLiters * 2.68;
+  }
 
+  // ---------------------------
+  // Line items
+  // ---------------------------
+  const parsedLines: ParsedInvoiceLine[] = [];
+
+  for (const l of lines) {
+    const lower = l.toLowerCase();
+
+    // Skip obviously non-item lines
+    if (/^invoice\b|^faktura\b/i.test(l)) continue;
+    if (/^invoice text\b/i.test(lower)) continue;
+    if (/^org\s*id\b/i.test(lower)) continue;
+    if (/^org\.?nr\b/i.test(lower)) continue;
+
+    // Skip pure total line – we already used it
+    if (/^total\b/i.test(lower)) continue;
+
+    // Pattern: "Something something 100 liter" or "Frozen fries 50 stk"
+    const m = l.match(/^(.*?)(\d[\d .,\u00A0]*)\s*(stk|st|pcs|pc|liter|litre|l|kg|m3|m\u00B3)\b/i);
+    if (!m) continue;
+
+    const [, descRaw, qtyRaw, unitRaw] = m;
+    const description = descRaw.trim().replace(/\s{2,}/g, " ");
+    const quantity = parseQuantity(qtyRaw);
+    const unit = unitRaw ? unitRaw.trim() : null;
+
+    parsedLines.push({
+      description: description || l,
+      quantity,
+      unitRaw: unit,
+      amountNok: null,
+    });
+  }
+
+  out.lines = parsedLines;
   return out;
 }
