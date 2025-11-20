@@ -1,40 +1,37 @@
 // src/lib/processInvoiceUpload.ts
 
-import parseInvoice from "../lib/invoiceParser";
+import parseInvoice from "./invoiceParser";
+// We only need the type now, not the function itself
 import type { RawInvoiceLine } from "./saveDocumentLinesWithCo2";
 
 export type ProcessInvoiceArgs = {
   supabase: any;               // Supabase server client
   orgId: string;               // organization / customer id
   invoiceText: string;         // full OCR text of the invoice
-  lines: RawInvoiceLine[];     // parsed line items (description, quantity, unitRaw, amountNok)
+  lines: RawInvoiceLine[];     // parsed line items (NOT used yet)
 };
 
 export async function processInvoiceUpload({
   supabase,
   orgId,
   invoiceText,
-  lines,
+  lines, // not used yet, kept for future
 }: ProcessInvoiceArgs) {
   // 1) Parse the invoice header + activity hints + rough co2
   const parsed = await parseInvoice(invoiceText);
 
-  // 2) Insert the document row
-  // We ONLY insert fields we know are numeric or safe, to avoid type issues.
+  // 2) Insert ONLY the document row (no document_line rows yet)
   const { data: docRows, error: docError } = await supabase
     .from("document")
     .insert([
       {
         org_id: orgId,
-
-        // Keep it minimal for now to avoid type mismatches
-        // If your document table has these numeric columns, this is safe:
-        total_amount: parsed.total,       // numeric
-        invoice_date: parsed.dateISO,     // date as string, Postgres can cast
-        co2_kg: parsed.co2Kg,             // numeric
-        energy_kwh: parsed.energyKwh,     // numeric
-        fuel_liters: parsed.fuelLiters,   // numeric
-        gas_m3: parsed.gasM3,             // numeric
+        total_amount: parsed.total ?? null,
+        invoice_date: parsed.dateISO ?? null,
+        co2_kg: parsed.co2Kg ?? null,
+        energy_kwh: parsed.energyKwh ?? null,
+        fuel_liters: parsed.fuelLiters ?? null,
+        gas_m3: parsed.gasM3 ?? null,
       },
     ])
     .select("id")
@@ -47,10 +44,10 @@ export async function processInvoiceUpload({
 
   const documentId = docRows.id as string;
 
-  // 3) Save line items with automatic CO2 enrichment
-  if (lines && lines.length > 0) {
-    await saveDocumentLinesWithCo2(supabase, documentId, lines);
-  }
+  // 3) TEMP: do not insert document_line rows until we’ve fully debugged schema
+  // if (lines && lines.length > 0) {
+  //   await saveDocumentLinesWithCo2(supabase, documentId, lines);
+  // }
 
   return {
     documentId,
