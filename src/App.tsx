@@ -4,7 +4,8 @@ import Demo from "./pages/Demo";
 import Benchmark from "./pages/Benchmark";
 import Invoices from "./pages/Invoices";
 import Nav from "./components/Nav";
-import TestInvoiceUpload from "./TestInvoiceUpload"; // NEW
+import TestInvoiceUpload from "./TestInvoiceUpload";
+import InvoiceDetailPage from "./pages/InvoiceDetail";  // ✅ NEW
 
 export default function App() {
   return (
@@ -15,7 +16,10 @@ export default function App() {
         <Route path="/demo" element={<Demo />} />
         <Route path="/benchmark" element={<Benchmark />} />
         <Route path="/invoices" element={<Invoices />} />
-        <Route path="/test-upload" element={<TestInvoiceUpload />} /> {/* NEW */}
+        <Route path="/test-upload" element={<TestInvoiceUpload />} />
+
+        {/* ✅ This enables clicking an invoice row */}
+        <Route path="/invoice/:id" element={<InvoiceDetailPage />} />
       </Routes>
     </BrowserRouter>
   );
