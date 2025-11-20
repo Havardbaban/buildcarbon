@@ -1,26 +1,25 @@
 // src/lib/processInvoiceUpload.ts
 
 import parseInvoice from "./invoiceParser";
-// We only need the type now, not the function itself
-import type { RawInvoiceLine } from "./saveDocumentLinesWithCo2";
+import { saveDocumentLinesWithCo2, RawInvoiceLine } from "./saveDocumentLinesWithCo2";
 
 export type ProcessInvoiceArgs = {
   supabase: any;               // Supabase server client
   orgId: string;               // organization / customer id
   invoiceText: string;         // full OCR text of the invoice
-  lines: RawInvoiceLine[];     // parsed line items (NOT used yet)
+  lines: RawInvoiceLine[];     // parsed line items
 };
 
 export async function processInvoiceUpload({
   supabase,
   orgId,
   invoiceText,
-  lines, // not used yet, kept for future
+  lines,
 }: ProcessInvoiceArgs) {
   // 1) Parse the invoice header + activity hints + rough co2
   const parsed = await parseInvoice(invoiceText);
 
-  // 2) Insert ONLY the document row (no document_line rows yet)
+  // 2) Insert ONLY the document row for now
   const { data: docRows, error: docError } = await supabase
     .from("document")
     .insert([
@@ -44,10 +43,10 @@ export async function processInvoiceUpload({
 
   const documentId = docRows.id as string;
 
-  // 3) TEMP: do not insert document_line rows until we’ve fully debugged schema
-  // if (lines && lines.length > 0) {
-  //   await saveDocumentLinesWithCo2(supabase, documentId, lines);
-  // }
+  // 3) TEMP: don't actually save lines yet – call the stub so nothing happens.
+  if (lines && lines.length > 0) {
+    await saveDocumentLinesWithCo2(supabase, documentId, lines);
+  }
 
   return {
     documentId,
