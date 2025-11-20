@@ -1,63 +1,84 @@
-// src/lib/processInvoiceUpload.ts
+import React, { useState } from "react";
+import processInvoiceUpload from "./lib/processInvoiceUpload";
+import supabase from "./lib/supabase";
 
-import parseInvoice from "./invoiceParser";
+export default function TestInvoiceUpload() {
+  const [orgId, setOrgId] = useState("");
+  const [invoiceText, setInvoiceText] = useState("");
+  const [status, setStatus] = useState("");
 
-export type RawInvoiceLine = {
-  description: string | null;
-  quantity: number | null;
-  unitRaw?: string | null;
-  amountNok?: number | null;
-};
+  const onSubmit = async () => {
+    setStatus("Processing...");
+    try {
+      const result = await processInvoiceUpload({
+        supabase,
+        orgId,
+        invoiceText,
+        lines: [], // for now no separate line system
+      });
 
-export type ProcessInvoiceArgs = {
-  supabase: any;          // Supabase server client (passed in)
-  orgId: string;          // organization / customer id
-  invoiceText: string;    // full OCR text of the invoice
-  lines?: RawInvoiceLine[]; // kept for later, NOT used now
-};
+      console.log("Invoice upload result:", result);
+      setStatus("Success! Saved invoice + CO2.");
+    } catch (err: any) {
+      console.error("Full error object:", err);
 
-export async function processInvoiceUpload({
-  supabase,
-  orgId,
-  invoiceText,
-}: ProcessInvoiceArgs) {
-  // 1) Parse the invoice text locally (no DB involved here)
-  const parsed = await parseInvoice(invoiceText);
+      // Try to show full JSON if possible
+      let msg = "";
+      try {
+        msg = JSON.stringify(err, null, 2);
+      } catch {
+        msg = err?.message ?? "Unknown error";
+      }
 
-  // 2) Insert ONLY one row into the `document` table.
-  //    We NEVER send the raw invoice text to any numeric column.
-  const { data: docRows, error: docError } = await supabase
-    .from("document")
-    .insert([
-      {
-        org_id: orgId,
-        total_amount: parsed.total ?? null,       // numeric
-        invoice_date: parsed.dateISO ?? null,     // date (string, Postgres casts)
-        co2_kg: parsed.co2Kg ?? null,             // numeric
-        energy_kwh: parsed.energyKwh ?? null,     // numeric
-        fuel_liters: parsed.fuelLiters ?? null,   // numeric
-        gas_m3: parsed.gasM3 ?? null,             // numeric
-      },
-    ])
-    .select("id")
-    .single();
-
-  if (docError) {
-    console.error("Failed to insert document:", docError);
-    throw docError;
-  }
-
-  const documentId = docRows.id as string;
-
-  // 3) IMPORTANT: we do NOT insert any `document_line` rows here yet.
-  //    That part will come later after the schema is cleaned up.
-
-  return {
-    documentId,
-    parsed,
+      setStatus("Error:\n" + msg);
+    }
   };
-}
 
-// Also export as default so both import styles work:
-// import { processInvoiceUpload } ... OR import processInvoiceUpload ...
-export default processInvoiceUpload;
+  return (
+    <div style={{ maxWidth: 900, margin: "40px auto", padding: 20 }}>
+      <h2>Test Invoice Upload with CO2</h2>
+
+      <label>Org ID (from organizations table):</label>
+      <div>
+        <input
+          value={orgId}
+          onChange={(e) => setOrgId(e.target.value)}
+          style={{ width: "100%", padding: 8, marginBottom: 20 }}
+        />
+      </div>
+
+      <label>Invoice text (paste OCR text here):</label>
+      <div>
+        <textarea
+          value={invoiceText}
+          onChange={(e) => setInvoiceText(e.target.value)}
+          style={{ width: "100%", height: 200, padding: 8, marginBottom: 20 }}
+        />
+      </div>
+
+      <button
+        onClick={onSubmit}
+        style={{
+          padding: "10px 20px",
+          fontSize: 16,
+          cursor: "pointer",
+          border: "1px solid black",
+          background: "white",
+        }}
+      >
+        Save test invoice + lines with CO2
+      </button>
+
+      <pre
+        style={{
+          whiteSpace: "pre-wrap",
+          background: "#f5f5f5",
+          padding: 20,
+          marginTop: 20,
+        }}
+      >
+        {status}
+      </pre>
+    </div>
+  );
+}
