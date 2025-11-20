@@ -21,29 +21,30 @@ export default function InvoicesPage() {
   const [error, setError] = useState<string | null>(null);
   const [docs, setDocs] = useState<DocumentRow[]>([]);
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setError(null);
+useEffect(() => {
+  const load = async () => {
+    setLoading(true);
+    setError(null);
 
-      const { data, error } = await supabase
-        .from("document")
-        .select("*")
-        .order("created_at", { ascending: false });
+    const { data, error } = await supabase
+      .from("document")
+      .select("*")
+      .order("issue_date", { ascending: false }); // ✅ use issue_date or remove this line
 
-      if (error) {
-        console.error("Error loading documents:", error);
-        setError(error.message ?? "Unknown error");
-        setDocs([]);
-      } else {
-        setDocs((data || []) as DocumentRow[]);
-      }
+    if (error) {
+      console.error("Error loading documents:", error);
+      setError(error.message ?? "Unknown error");
+      setDocs([]);
+    } else {
+      setDocs((data || []) as DocumentRow[]);
+    }
 
-      setLoading(false);
-    };
+    setLoading(false);
+  };
 
-    load();
-  }, []);
+  load();
+}, []);
+
 
   // --- helpers ------------------------------------------------------------
 
