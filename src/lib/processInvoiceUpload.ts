@@ -1,19 +1,13 @@
 // src/lib/processInvoiceUpload.ts
 
 import parseInvoice from "./invoiceParser";
-
-export type RawInvoiceLine = {
-  description: string | null;
-  quantity: number | null;
-  unitRaw?: string | null;
-  amountNok?: number | null;
-};
+import saveDocumentLinesWithCo2 from "./saveDocumentLinesWithCo2";
 
 export type ProcessInvoiceArgs = {
-  supabase: any;          // Supabase server client (passed in)
-  orgId: string;          // organization / customer id
-  invoiceText: string;    // full OCR text of the invoice
-  lines?: RawInvoiceLine[]; // kept for later, NOT used now
+  supabase: any;        // Supabase client
+  orgId: string;        // organization / customer id
+  invoiceText: string;  // full OCR text
+  // `lines` is no longer needed; we parse them from the text
 };
 
 export async function processInvoiceUpload({
@@ -21,22 +15,22 @@ export async function processInvoiceUpload({
   orgId,
   invoiceText,
 }: ProcessInvoiceArgs) {
-  // 1) Parse the invoice text locally (no DB involved here)
+  // 1) Parse invoice (header + line items)
   const parsed = await parseInvoice(invoiceText);
 
-  // 2) Insert ONLY one row into the `document` table.
-  //    We NEVER send the raw invoice text to any numeric column.
+  // 2) Insert document row
   const { data: docRows, error: docError } = await supabase
     .from("document")
     .insert([
       {
         org_id: orgId,
-        total_amount: parsed.total ?? null,       // numeric
-        invoice_date: parsed.dateISO ?? null,     // date (string, Postgres casts)
-        co2_kg: parsed.co2Kg ?? null,             // numeric
-        energy_kwh: parsed.energyKwh ?? null,     // numeric
-        fuel_liters: parsed.fuelLiters ?? null,   // numeric
-        gas_m3: parsed.gasM3 ?? null,             // numeric
+        total_amount: parsed.total ?? null,
+        issue_date: parsed.dateISO ?? null,
+        currency: parsed.currency ?? "NOK",
+        co2_kg: parsed.co2Kg ?? null,
+        energy_kwh: parsed.energyKwh ?? null,
+        fuel_liters: parsed.fuelLiters ?? null,
+        gas_m3: parsed.gasM3 ?? null,
       },
     ])
     .select("id")
@@ -49,8 +43,10 @@ export async function processInvoiceUpload({
 
   const documentId = docRows.id as string;
 
-  // 3) IMPORTANT: we do NOT insert any `document_line` rows here yet.
-  //    That part will come later after the schema is cleaned up.
+  // 3) Insert line items with CO2, if any
+  if (parsed.lines && parsed.lines.length > 0) {
+    await saveDocumentLinesWithCo2(supabase, documentId, parsed.lines);
+  }
 
   return {
     documentId,
@@ -58,6 +54,4 @@ export async function processInvoiceUpload({
   };
 }
 
-// Also export as default so both import styles work:
-// import { processInvoiceUpload } ... OR import processInvoiceUpload ...
 export default processInvoiceUpload;
