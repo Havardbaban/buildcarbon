@@ -1,334 +1,200 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { supabase } from '@/lib/supabaseClient'; // adjust path if needed
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabaseClient';
 
 type Invoice = {
   id: string;
-  filename: string | null;
-  vendor: string | null;
-  invoice_no: string | null;
   invoice_date: string | null;
   total: number | null;
   currency: string | null;
   total_co2_kg: number | null;
-  energy_kwh: number | null;
-  fuel_type: string | null;
-  status: string | null;
-  created_at: string;
+  fuel_liters: number | null;
 };
 
-type InvoiceLine = {
-  id: string;
-  invoice_id: string;
-  description: string | null;
-  quantity: number | null;
-  unit_price: number | null;
-  amount: number | null;
-  category: string | null;
-  co2_kg: number | null;
-  energy_kwh: number | null;
-};
-
-export default function InvoiceDetailPage() {
-  const params = useParams() as { id: string };
+export default function InvoicesSection() {
   const router = useRouter();
-  const invoiceId = params.id;
 
-  const [invoice, setInvoice] = useState<Invoice | null>(null);
-  const [lines, setLines] = useState<InvoiceLine[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!invoiceId) return;
-
-    const fetchData = async () => {
+    const loadInvoices = async () => {
       setLoading(true);
-      setError(null);
 
-      // 1) Fetch invoice
-      const { data: invoiceData, error: invoiceError } = await supabase
+      const { data, error } = await supabase
         .from('invoices')
-        .select('*')
-        .eq('id', invoiceId)
-        .single();
+        .select(
+          'id, invoice_date, total, currency, total_co2_kg, fuel_liters'
+        )
+        .order('created_at', { ascending: false });
 
-      if (invoiceError || !invoiceData) {
-        setError('Kunne ikke finne fakturaen.');
-        setLoading(false);
-        return;
+      if (!error && data) {
+        setInvoices(data as Invoice[]);
       }
 
-      // 2) Fetch line items
-      const { data: lineData, error: lineError } = await supabase
-        .from('invoice_lines')
-        .select('*')
-        .eq('invoice_id', invoiceId)
-        .order('id', { ascending: true });
-
-      if (lineError) {
-        setError('Kunne ikke hente linjene til fakturaen.');
-        setLoading(false);
-        setInvoice(invoiceData as Invoice);
-        return;
-      }
-
-      setInvoice(invoiceData as Invoice);
-      setLines((lineData || []) as InvoiceLine[]);
       setLoading(false);
     };
 
-    fetchData();
-  }, [invoiceId]);
+    loadInvoices();
+  }, []);
 
-  if (loading) {
-    return (
-      <div className="p-6">
-        <p>Laster faktura…</p>
-      </div>
-    );
-  }
+  // --- helpers -------------------------------------------------------------
 
-  if (error || !invoice) {
-    return (
-      <div className="p-6 space-y-4">
-        <button
-          onClick={() => router.back()}
-          className="text-sm underline"
-        >
-          ← Tilbake
-        </button>
-        <p className="text-red-600">{error ?? 'Fant ikke fakturaen.'}</p>
-      </div>
-    );
-  }
-
-  // Helper formatters
-  const formatNumber = (value: number | null | undefined, decimals = 2) => {
-    if (value === null || value === undefined) return '-';
+  const formatAmount = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '—';
     return value.toLocaleString('nb-NO', {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    });
+  };
+
+  const formatCO2 = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return '—';
+    return value.toLocaleString('nb-NO', {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
     });
   };
 
   const formatDate = (value: string | null) => {
-    if (!value) return '-';
+    if (!value) return '—';
     const d = new Date(value);
-    if (isNaN(d.getTime())) return value;
+    if (isNaN(d.getTime())) return '—';
     return d.toLocaleDateString('nb-NO');
   };
 
+  // --- aggregates ----------------------------------------------------------
+
+  const invoiceCount = invoices.length;
+
+  const totalAmount = invoices.reduce((sum, inv) => {
+    return sum + (inv.total ?? 0);
+  }, 0);
+
+  const totalCO2 = invoices.reduce((sum, inv) => {
+    return sum + (inv.total_co2_kg ?? 0);
+  }, 0);
+
+  const totalFuelLiters = invoices.reduce((sum, inv) => {
+    return sum + (inv.fuel_liters ?? 0);
+  }, 0);
+
+  const currency = invoices[0]?.currency ?? 'NOK';
+
+  // --- render --------------------------------------------------------------
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-50">
-      <div className="mx-auto max-w-5xl p-6 space-y-6">
-        {/* Top nav / breadcrumb */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="space-y-1">
-            <button
-              onClick={() => router.back()}
-              className="text-sm text-slate-400 hover:text-slate-200 underline"
-            >
-              ← Tilbake til fakturaliste
-            </button>
-            <h1 className="text-2xl font-semibold">
-              Faktura detalj
-            </h1>
-            <p className="text-sm text-slate-400">
-              {invoice.vendor ?? 'Ukjent leverandør'} •{' '}
-              {invoice.invoice_no ? `Faktura #${invoice.invoice_no}` : invoice.filename}
-            </p>
-          </div>
+    <section className="w-full max-w-5xl mx-auto mt-10 space-y-6">
+      <h2 className="text-3xl font-semibold tracking-tight">
+        Invoices & CO₂
+      </h2>
 
-          <div className="text-right text-sm text-slate-400">
-            {invoice.status && (
-              <p>
-                Status:{' '}
-                <span className="inline-flex rounded-full bg-slate-800 px-3 py-1 text-xs uppercase tracking-wide">
-                  {invoice.status}
-                </span>
-              </p>
-            )}
-            <p>Opprettet: {formatDate(invoice.created_at)}</p>
-          </div>
+      {/* summary cards */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
+          <p className="text-xs font-medium uppercase text-slate-500">
+            Invoices
+          </p>
+          <p className="mt-3 text-2xl font-semibold">{invoiceCount}</p>
         </div>
 
-        {/* Invoice meta cards */}
-        <div className="grid gap-4 md:grid-cols-4">
-          <div className="rounded-2xl bg-slate-900/60 p-4 border border-slate-800">
-            <p className="text-xs uppercase text-slate-400">Totalbeløp</p>
-            <p className="mt-2 text-xl font-semibold">
-              {formatNumber(invoice.total ?? 0)} {invoice.currency ?? 'NOK'}
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-slate-900/60 p-4 border border-slate-800">
-            <p className="text-xs uppercase text-slate-400">Total CO₂</p>
-            <p className="mt-2 text-xl font-semibold">
-              {formatNumber(invoice.total_co2_kg ?? 0, 1)} kg
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-slate-900/60 p-4 border border-slate-800">
-            <p className="text-xs uppercase text-slate-400">Dato</p>
-            <p className="mt-2 text-lg font-medium">
-              {formatDate(invoice.invoice_date)}
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-slate-900/60 p-4 border border-slate-800 space-y-1">
-            <p className="text-xs uppercase text-slate-400">Energi & drivstoff</p>
-            <p className="text-sm">
-              {invoice.energy_kwh
-                ? `${formatNumber(invoice.energy_kwh, 1)} kWh`
-                : 'Ingen energi registrert'}
-            </p>
-            <p className="text-xs text-slate-400">
-              Drivstoff: {invoice.fuel_type ?? '-'}
-            </p>
-          </div>
+        <div className="rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
+          <p className="text-xs font-medium uppercase text-slate-500">
+            Total amount
+          </p>
+          <p className="mt-3 text-2xl font-semibold">
+            {formatAmount(totalAmount)} {currency}
+          </p>
         </div>
 
-        {/* Supplier / meta section */}
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-2xl bg-slate-900/60 p-4 border border-slate-800 space-y-2">
-            <h2 className="text-sm font-semibold text-slate-200">
-              Leverandør
-            </h2>
-            <p className="text-sm text-slate-300">
-              {invoice.vendor ?? 'Ukjent'}
-            </p>
-            {invoice.invoice_no && (
-              <p className="text-xs text-slate-400">
-                Fakturanummer: {invoice.invoice_no}
-              </p>
-            )}
-            {invoice.filename && (
-              <p className="text-xs text-slate-500">
-                Filnavn: {invoice.filename}
-              </p>
-            )}
-          </div>
-
-          <div className="rounded-2xl bg-slate-900/60 p-4 border border-slate-800 space-y-2">
-            <h2 className="text-sm font-semibold text-slate-200">
-              CO₂-intensitet
-            </h2>
-            <p className="text-sm text-slate-300">
-              {invoice.total && invoice.total_co2_kg
-                ? `${formatNumber(
-                    invoice.total_co2_kg / invoice.total,
-                    3
-                  )} kg CO₂ / kr`
-                : 'Mangler data for å beregne CO₂-intensitet.'}
-            </p>
-          </div>
-        </div>
-
-        {/* Line items table */}
-        <div className="rounded-2xl bg-slate-900/60 border border-slate-800 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-            <h2 className="text-sm font-semibold text-slate-200">
-              Linjer ({lines.length})
-            </h2>
-            {/* Future: filters / category / etc */}
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-900/80">
-                <tr>
-                  <th className="px-4 py-2 text-left text-xs font-semibold text-slate-400 uppercase">
-                    Beskrivelse
-                  </th>
-                  <th className="px-4 py-2 text-right text-xs font-semibold text-slate-400 uppercase">
-                    Kategori
-                  </th>
-                  <th className="px-4 py-2 text-right text-xs font-semibold text-slate-400 uppercase">
-                    Antall
-                  </th>
-                  <th className="px-4 py-2 text-right text-xs font-semibold text-slate-400 uppercase">
-                    Enhetspris
-                  </th>
-                  <th className="px-4 py-2 text-right text-xs font-semibold text-slate-400 uppercase">
-                    Beløp
-                  </th>
-                  <th className="px-4 py-2 text-right text-xs font-semibold text-slate-400 uppercase">
-                    CO₂ (kg)
-                  </th>
-                  <th className="px-4 py-2 text-right text-xs font-semibold text-slate-400 uppercase">
-                    Energi (kWh)
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={7}
-                      className="px-4 py-6 text-center text-sm text-slate-400"
-                    >
-                      Ingen linjer funnet for denne fakturaen.
-                    </td>
-                  </tr>
-                )}
-
-                {lines.map((line) => (
-                  <tr
-                    key={line.id}
-                    className="border-t border-slate-800 hover:bg-slate-900/80"
-                  >
-                    <td className="px-4 py-2 align-top">
-                      <p className="text-sm text-slate-100">
-                        {line.description ?? 'Ingen beskrivelse'}
-                      </p>
-                    </td>
-                    <td className="px-4 py-2 align-top text-right text-xs text-slate-400">
-                      {line.category ?? '-'}
-                    </td>
-                    <td className="px-4 py-2 align-top text-right">
-                      {line.quantity ?? '-'}
-                    </td>
-                    <td className="px-4 py-2 align-top text-right">
-                      {line.unit_price !== null && line.unit_price !== undefined
-                        ? formatNumber(line.unit_price)
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-2 align-top text-right">
-                      {line.amount !== null && line.amount !== undefined
-                        ? formatNumber(line.amount)
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-2 align-top text-right">
-                      {line.co2_kg !== null && line.co2_kg !== undefined
-                        ? formatNumber(line.co2_kg, 2)
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-2 align-top text-right">
-                      {line.energy_kwh !== null && line.energy_kwh !== undefined
-                        ? formatNumber(line.energy_kwh, 1)
-                        : '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Optional: back to dashboard link */}
-        <div className="pt-2">
-          <Link
-            href="/"
-            className="text-sm text-slate-400 hover:text-slate-100 underline"
-          >
-            ← Til dashboard
-          </Link>
+        <div className="rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
+          <p className="text-xs font-medium uppercase text-slate-500">
+            Total CO₂
+          </p>
+          <p className="mt-3 text-2xl font-semibold">
+            {formatCO2(totalCO2)} kg
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            From approx. {formatAmount(totalFuelLiters)} liters of fuel
+          </p>
         </div>
       </div>
-    </div>
+
+      {/* table */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Invoice ID
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Issue date
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Amount (NOK)
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                CO₂ (kg)
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Fuel (liters)
+              </th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {loading && (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-6 py-6 text-center text-slate-500"
+                >
+                  Loading invoices…
+                </td>
+              </tr>
+            )}
+
+            {!loading && invoices.length === 0 && (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-6 py-6 text-center text-slate-500"
+                >
+                  No invoices yet.
+                </td>
+              </tr>
+            )}
+
+            {!loading &&
+              invoices.map((invoice) => (
+                <tr
+                  key={invoice.id}
+                  className="border-t border-slate-100 cursor-pointer hover:bg-slate-50"
+                  onClick={() => router.push(`/invoice/${invoice.id}`)}
+                >
+                  <td className="px-6 py-3 text-xs text-slate-600">
+                    {invoice.id}
+                  </td>
+                  <td className="px-6 py-3 text-sm text-slate-800">
+                    {formatDate(invoice.invoice_date)}
+                  </td>
+                  <td className="px-6 py-3 text-sm text-right text-slate-800">
+                    {formatAmount(invoice.total)}
+                  </td>
+                  <td className="px-6 py-3 text-sm text-right text-slate-800">
+                    {formatCO2(invoice.total_co2_kg)}
+                  </td>
+                  <td className="px-6 py-3 text-sm text-right text-slate-800">
+                    {formatAmount(invoice.fuel_liters)}
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
