@@ -1,65 +1,60 @@
-// src/lib/saveDocumentLinesWithCo2.ts
+// src/lib/processInvoiceUpload.ts
 
-import { enrichLineWithCo2, LineInput } from "./classifyLineItem";
+import parseInvoice from "./invoiceParser";
+// NOTE: we still import the type but we won't call saveDocumentLinesWithCo2 yet
+import type { RawInvoiceLine } from "./saveDocumentLinesWithCo2";
 
-export type RawInvoiceLine = {
-  // we keep these for classification/CO2, but we won't store description yet
-  description: string | null;
-  quantity: number | null;
-  unitRaw?: string | null;   // e.g. "stk", "kg", "l"
-  amountNok?: number | null; // kept for later use
+export type ProcessInvoiceArgs = {
+  supabase: any;               // Supabase server client
+  orgId: string;               // organization / customer id
+  invoiceText: string;         // full OCR text of the invoice
+  lines: RawInvoiceLine[];     // parsed line items (NOT used yet)
 };
 
-/**
- * Save multiple lines for one document into the `document_line` table,
- * automatically calculating CO2 and filling ONLY the CO2-related columns
- * that we know match the schema.
- *
- * IMPORTANT: we deliberately do NOT insert `description` or any legacy
- * numeric fields right now, to avoid type mismatches in the existing schema.
- */
-export async function saveDocumentLinesWithCo2(
-  supabase: any,
-  documentId: string,
-  lines: RawInvoiceLine[]
-) {
-  if (!documentId) {
-    throw new Error("documentId is required");
-  }
-  if (!lines || lines.length === 0) {
-    return;
-  }
+export async function processInvoiceUpload({
+  supabase,
+  orgId,
+  invoiceText,
+  lines, // eslint will complain if unused, that's ok for now
+}: ProcessInvoiceArgs) {
+  // 1) Parse the invoice header + activity hints + rough co2
+  const parsed = await parseInvoice(invoiceText);
 
-  const toInsert: any[] = [];
+  // 2) Insert ONLY the document row
+  const { data: docRows, error: docError } = await supabase
+    .from("document")
+    .insert([
+      {
+        org_id: orgId,
+        // keep this minimal and safe
+        total_amount: parsed.total ?? null,
+        invoice_date: parsed.dateISO ?? null,
+        co2_kg: parsed.co2Kg ?? null,
+        energy_kwh: parsed.energyKwh ?? null,
+        fuel_liters: parsed.fuelLiters ?? null,
+        gas_m3: parsed.gasM3 ?? null,
+      },
+    ])
+    .select("id")
+    .single();
 
-  for (const line of lines) {
-    const enriched = await enrichLineWithCo2(supabase, {
-      description: line.description,
-      quantity: line.quantity,
-      unitRaw: line.unitRaw ?? null,
-    } as LineInput);
-
-    toInsert.push({
-      document_id: documentId,
-
-      // ⚠️ NO `description` here for now
-      // ⚠️ NO `quantity`, `net_amount`, `vat_amount`, etc.
-
-      // Only new CO2-related fields:
-      unit_raw: enriched.unitRaw,
-      unit_normalized: enriched.unitNormalized,
-      quantity_normalized: enriched.quantityNormalized,
-      product_category_id: enriched.productCategoryId,
-      emission_factor_id: enriched.emissionFactorId,
-      co2_kg: enriched.co2Kg,
-      co2_source: enriched.co2Source,
-    });
+  if (docError) {
+    console.error("Failed to insert document:", docError);
+    throw docError;
   }
 
-  const { error } = await supabase.from("document_line").insert(toInsert);
+  const documentId = docRows.id as string;
 
-  if (error) {
-    console.error("Failed to insert document_line rows with CO2:", error);
-    throw error;
-  }
+  // 3) 👇 TEMPORARILY DISABLED:
+  // We do NOT insert any document_line rows here until we've proven
+  // the document insert is clean and the numeric error is gone.
+  //
+  // if (lines && lines.length > 0) {
+  //   await saveDocumentLinesWithCo2(supabase, documentId, lines);
+  // }
+
+  return {
+    documentId,
+    parsed,
+  };
 }
