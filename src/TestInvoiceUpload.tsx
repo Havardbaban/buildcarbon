@@ -1,98 +1,84 @@
-// src/TestInvoiceUpload.tsx
-
 import React, { useState } from "react";
-import { createClient } from "@supabase/supabase-js";
-import { processInvoiceUpload } from "./lib/processInvoiceUpload";
-
-// ⚠️ If you already have a supabase client in src/lib/supabase.ts, use that instead.
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import processInvoiceUpload from "./lib/processInvoiceUpload";
+import supabase from "./lib/supabase";
 
 export default function TestInvoiceUpload() {
-  const [invoiceText, setInvoiceText] = useState("");
   const [orgId, setOrgId] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
+  const [invoiceText, setInvoiceText] = useState("");
+  const [status, setStatus] = useState("");
 
-  async function handleTestUpload() {
-    setStatus("Saving...");
-
+  const onSubmit = async () => {
+    setStatus("Processing...");
     try {
-      if (!orgId) {
-        setStatus("Please enter an orgId (existing organization id from Supabase).");
-        return;
-      }
-      if (!invoiceText.trim()) {
-        setStatus("Please paste some invoice text first.");
-        return;
-      }
-
-      // For now we hard-code a couple of example lines.
-      // Later you will replace this with real parsed lines from the PDF.
-      const exampleLines = [
-        {
-          description: "Diesel fuel 100 liter",
-          quantity: 100,
-          unitRaw: "l",
-          amountNok: 2500,
-        },
-        {
-          description: "Frozen fries 50 stk",
-          quantity: 50,
-          unitRaw: "stk",
-          amountNok: 1500,
-        },
-        {
-          description: "Office laptop",
-          quantity: 1,
-          unitRaw: "stk",
-          amountNok: 12000,
-        },
-      ];
-
       const result = await processInvoiceUpload({
         supabase,
         orgId,
         invoiceText,
-        lines: exampleLines,
+        lines: [], // for now no separate line system
       });
 
-      setStatus(`Done! Created document_id=${result.documentId}`);
+      console.log("Invoice upload result:", result);
+      setStatus("Success! Saved invoice + CO2.");
     } catch (err: any) {
-      console.error(err);
-      setStatus(`Error: ${err.message ?? "unknown error"}`);
+      console.error("Full error object:", err);
+
+      // Try to show full JSON if possible
+      let msg = "";
+      try {
+        msg = JSON.stringify(err, null, 2);
+      } catch {
+        msg = err?.message ?? "Unknown error";
+      }
+
+      setStatus("Error:\n" + msg);
     }
-  }
+  };
 
   return (
-    <div style={{ maxWidth: 800, margin: "2rem auto", padding: "1rem" }}>
-      <h1>Test Invoice Upload with CO2</h1>
+    <div style={{ maxWidth: 900, margin: "40px auto", padding: 20 }}>
+      <h2>Test Invoice Upload with CO2</h2>
 
-      <label style={{ display: "block", marginBottom: "0.5rem" }}>
-        Org ID (from organizations table):
+      <label>Org ID (from organizations table):</label>
+      <div>
         <input
-          type="text"
           value={orgId}
           onChange={(e) => setOrgId(e.target.value)}
-          style={{ width: "100%", padding: "0.5rem", marginTop: "0.25rem" }}
+          style={{ width: "100%", padding: 8, marginBottom: 20 }}
         />
-      </label>
+      </div>
 
-      <label style={{ display: "block", marginBottom: "0.5rem" }}>
-        Invoice text (paste OCR text here):
+      <label>Invoice text (paste OCR text here):</label>
+      <div>
         <textarea
           value={invoiceText}
           onChange={(e) => setInvoiceText(e.target.value)}
-          rows={10}
-          style={{ width: "100%", padding: "0.5rem", marginTop: "0.25rem" }}
+          style={{ width: "100%", height: 200, padding: 8, marginBottom: 20 }}
         />
-      </label>
+      </div>
 
-      <button onClick={handleTestUpload} style={{ padding: "0.5rem 1rem" }}>
+      <button
+        onClick={onSubmit}
+        style={{
+          padding: "10px 20px",
+          fontSize: 16,
+          cursor: "pointer",
+          border: "1px solid black",
+          background: "white",
+        }}
+      >
         Save test invoice + lines with CO2
       </button>
 
-      {status && <p style={{ marginTop: "1rem" }}>{status}</p>}
+      <pre
+        style={{
+          whiteSpace: "pre-wrap",
+          background: "#f5f5f5",
+          padding: 20,
+          marginTop: 20,
+        }}
+      >
+        {status}
+      </pre>
     </div>
   );
 }
