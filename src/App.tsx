@@ -7,6 +7,7 @@ import Nav from "./components/Nav";
 import TestInvoiceUpload from "./TestInvoiceUpload";
 import InvoiceDetailPage from "./pages/InvoiceDetail"; // ✅
 import Measures from "./pages/Measures";               // ✅ NEW
+import DashboardPage from "./pages/Dashboard"; // NEW
 
 
 export default function App() {
