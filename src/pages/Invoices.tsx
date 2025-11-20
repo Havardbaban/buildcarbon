@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import InvoiceUpload from "../components/InvoiceUpload";
-import InvoiceTable from "../components/InvoiceTable";
+import InvoiceTable from "../components/InvoiceTable"; // remove InvoiceUpload
+
 
 export default function InvoicesPage() {
   const [refreshKey, setRefreshKey] = useState<string>("");
