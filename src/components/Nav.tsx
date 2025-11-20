@@ -9,7 +9,6 @@ export default function Nav() {
   return (
     <header className="border-b border-slate-200 bg-white">
       <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
-        
         {/* Logo / Brand */}
         <Link to="/" className="flex items-center gap-2">
           <div className="h-8 w-8 rounded-full bg-green-600 flex items-center justify-center text-white text-xs font-bold">
@@ -20,7 +19,7 @@ export default function Nav() {
           </span>
         </Link>
 
-        {/* Navigation Links */}
+        {/* Navigation */}
         <nav className="flex items-center gap-4">
           <NavLink
             to="/"
@@ -58,7 +57,15 @@ export default function Nav() {
             Invoices
           </NavLink>
 
-          {/* ✅ NEW LINK */}
+          <NavLink
+            to="/dashboard"
+            className={({ isActive }) =>
+              isActive ? activeLink : baseLink
+            }
+          >
+            ESG
+          </NavLink>
+
           <NavLink
             to="/measures"
             className={({ isActive }) =>
