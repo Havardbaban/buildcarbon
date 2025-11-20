@@ -2,31 +2,20 @@
 
 import { enrichLineWithCo2, LineInput } from "./classifyLineItem";
 
-/**
- * Shape of a raw line coming from your invoice OCR/parser.
- * You can adjust these fields to match what you already have.
- */
 export type RawInvoiceLine = {
   description: string | null;
   quantity: number | null;
   unitRaw?: string | null;   // e.g. "stk", "kg", "l"
-  amountNok?: number | null; // line total in NOK (optional)
+  amountNok?: number | null; // NOT used yet – keeping for future
 };
 
 /**
  * Save multiple lines for one document into the `document_line` table,
- * automatically calculating CO2 and filling:
- * - unit_raw
- * - unit_normalized
- * - quantity_normalized
- * - product_category_id
- * - emission_factor_id
- * - co2_kg
- * - co2_source
+ * automatically calculating CO2 and filling ONLY the columns we know
+ * match the schema safely.
  *
- * @param supabase - a Supabase client instance
- * @param documentId - the id of the parent document (FK to public.document.id)
- * @param lines - raw line items from your parser/OCR
+ * We intentionally do NOT touch legacy numeric columns like `quantity`,
+ * `net_amount`, `vat_amount` until we’ve confirmed their types.
  */
 export async function saveDocumentLinesWithCo2(
   supabase: any,
@@ -51,11 +40,11 @@ export async function saveDocumentLinesWithCo2(
 
     toInsert.push({
       document_id: documentId,
-      description: line.description,
-      quantity: line.quantity,
-      amount: line.amountNok ?? null,
 
-      // New CO2-related fields:
+      // keep description only, avoid touching any numeric legacy cols:
+      description: line.description,
+
+      // NEW CO2-related fields (these match the columns we added):
       unit_raw: enriched.unitRaw,
       unit_normalized: enriched.unitNormalized,
       quantity_normalized: enriched.quantityNormalized,
