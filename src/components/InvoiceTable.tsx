@@ -1,8 +1,5 @@
-'use client';
-
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { supabase } from '@/lib/supabaseClient';
+import { supabase } from '../lib/supabase';
 
 type Invoice = {
   id: string;
@@ -15,7 +12,7 @@ type Invoice = {
   total_co2_kg: number | null;
 };
 
-export default function InvoiceTable() {
+export default function InvoiceTable({ refresh }: { refresh?: number }) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -37,7 +34,7 @@ export default function InvoiceTable() {
     };
 
     load();
-  }, []);
+  }, [refresh]);
 
   const formatNumber = (value: number | null | undefined) => {
     if (value === null || value === undefined) return '-';
@@ -55,30 +52,30 @@ export default function InvoiceTable() {
   };
 
   return (
-    <div className="rounded-2xl bg-slate-900/60 border border-slate-800 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-        <h2 className="text-sm font-semibold text-slate-200">
-          Fakturaer
+    <div className="rounded-2xl bg-white border border-slate-200 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+        <h2 className="text-sm font-semibold text-slate-900">
+          Invoices
         </h2>
-        <p className="text-xs text-slate-400">
-          Klikk på en rad for å se detaljer
+        <p className="text-xs text-slate-500">
+          {invoices.length} invoices found
         </p>
       </div>
 
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
-          <thead className="bg-slate-900/80">
+          <thead className="bg-slate-50">
             <tr>
-              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-400 uppercase">
-                Leverandør / Faktura
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase">
+                Vendor / Invoice
               </th>
-              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-400 uppercase">
-                Dato
+              <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase">
+                Date
               </th>
-              <th className="px-4 py-2 text-right text-xs font-semibold text-slate-400 uppercase">
-                Beløp
+              <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase">
+                Amount
               </th>
-              <th className="px-4 py-2 text-right text-xs font-semibold text-slate-400 uppercase">
+              <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase">
                 CO₂ (kg)
               </th>
             </tr>
@@ -88,9 +85,9 @@ export default function InvoiceTable() {
               <tr>
                 <td
                   colSpan={4}
-                  className="px-4 py-6 text-center text-slate-400"
+                  className="px-4 py-6 text-center text-slate-500"
                 >
-                  Laster fakturaer…
+                  Loading invoices…
                 </td>
               </tr>
             )}
@@ -99,9 +96,9 @@ export default function InvoiceTable() {
               <tr>
                 <td
                   colSpan={4}
-                  className="px-4 py-6 text-center text-slate-400"
+                  className="px-4 py-6 text-center text-slate-500"
                 >
-                  Ingen fakturaer funnet.
+                  No invoices found. Upload one above to get started.
                 </td>
               </tr>
             )}
@@ -109,40 +106,31 @@ export default function InvoiceTable() {
             {invoices.map((invoice) => (
               <tr
                 key={invoice.id}
-                className="border-t border-slate-800 hover:bg-slate-900/80 cursor-pointer"
+                className="border-t border-slate-200 hover:bg-slate-50"
               >
-                {/* Whole first cell is a link */}
                 <td className="px-4 py-2">
-                  <Link href={`/invoice/${invoice.id}`}>
-                    <div className="space-y-1">
-                      <p className="text-sm text-slate-100">
-                        {invoice.vendor ?? 'Ukjent leverandør'}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {invoice.invoice_no
-                          ? `Faktura #${invoice.invoice_no}`
-                          : invoice.filename ?? 'Uten fakturanummer'}
-                      </p>
-                    </div>
-                  </Link>
+                  <div className="space-y-1">
+                    <p className="text-sm text-slate-900">
+                      {invoice.vendor ?? 'Unknown vendor'}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {invoice.invoice_no
+                        ? `Invoice #${invoice.invoice_no}`
+                        : invoice.filename ?? 'No invoice number'}
+                    </p>
+                  </div>
                 </td>
 
-                <td className="px-4 py-2 text-sm text-slate-200">
-                  <Link href={`/invoice/${invoice.id}`}>
-                    {formatDate(invoice.invoice_date)}
-                  </Link>
+                <td className="px-4 py-2 text-sm text-slate-700">
+                  {formatDate(invoice.invoice_date)}
                 </td>
 
-                <td className="px-4 py-2 text-right text-sm text-slate-200">
-                  <Link href={`/invoice/${invoice.id}`}>
-                    {formatNumber(invoice.total)} {invoice.currency ?? 'NOK'}
-                  </Link>
+                <td className="px-4 py-2 text-right text-sm text-slate-900">
+                  {formatNumber(invoice.total)} {invoice.currency ?? 'NOK'}
                 </td>
 
-                <td className="px-4 py-2 text-right text-sm text-slate-200">
-                  <Link href={`/invoice/${invoice.id}`}>
-                    {formatNumber(invoice.total_co2_kg ?? 0)}
-                  </Link>
+                <td className="px-4 py-2 text-right text-sm text-slate-900">
+                  {formatNumber(invoice.total_co2_kg ?? 0)}
                 </td>
               </tr>
             ))}

@@ -10,6 +10,7 @@ import TestInvoiceUpload from "./TestInvoiceUpload";
 import InvoiceDetailPage from "./pages/InvoiceDetail";
 import Measures from "./pages/Measures";
 import DashboardPage from "./pages/Dashboard";
+import InvoiceScannerPage from "./pages/InvoiceScanner";
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/demo" element={<Demo />} />
         <Route path="/benchmark" element={<Benchmark />} />
         <Route path="/invoices" element={<Invoices />} />
+        <Route path="/scanner" element={<InvoiceScannerPage />} />
         <Route path="/invoice/:id" element={<InvoiceDetailPage />} />
         <Route path="/measures" element={<Measures />} />
         <Route path="/dashboard" element={<DashboardPage />} />

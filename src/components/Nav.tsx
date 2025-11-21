@@ -48,6 +48,13 @@ export default function Nav() {
           </NavLink>
 
           <NavLink
+            to="/scanner"
+            className={({ isActive }) => (isActive ? active : base)}
+          >
+            Scanner
+          </NavLink>
+
+          <NavLink
             to="/dashboard"
             className={({ isActive }) => (isActive ? active : base)}
           >
