@@ -1,8 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
-import { processInvoiceUpload } from "../src/lib/processInvoiceUpload"; // ⬅ named import
+import { processInvoiceUpload } from "../src/lib/processInvoiceUpload";
+import pdfParse from "pdf-parse";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+// Use your real Vercel env vars
+const supabaseUrl = process.env.VITE_SUPABASE_URL!;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+if (!supabaseUrl) console.error("Missing VITE_SUPABASE_URL");
+if (!serviceRoleKey) console.error("Missing SUPABASE_SERVICE_ROLE_KEY");
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false },
