@@ -120,7 +120,7 @@ export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?:
       const storagePath = `invoices/${fileId}.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
-        .from("invoices")
+        .from("INVOICES")
         .upload(storagePath, file);
 
       if (uploadError) {
@@ -134,7 +134,7 @@ export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?:
       }
 
       const { data: urlData } = supabase.storage
-        .from("invoices")
+        .from("INVOICES")
         .getPublicUrl(storagePath);
 
       setProgress("Processing file with OCR...");
