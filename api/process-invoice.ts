@@ -43,7 +43,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    // OPTIONAL: you can verify the file exists in Storage if you want
+    // OPTIONAL: check that the file exists in Storage
     const { data: fileData, error: fileErr } = await supabase.storage
       .from("invoices")
       .download(filePath);
@@ -55,23 +55,31 @@ export default async function handler(req: any, res: any) {
     }
 
     // 2) Insert a simple document row.
-   const { data: docRows, error: docError } = await supabase
-  .from("document")
-  .insert({
-    supplier_org_number: Number(orgId),   // ✅ correct place
-    total_amount: parsed.total ?? null,
-    currency: parsed.currency ?? "NOK",
-    co2_kg: parsed.co2 ?? null,
-    fuel_liters: parsed.fuelLiters ?? null,
-    issue_date: parsed.dateISO ?? null,
-  })
-  .select("id")
-  .single();
+    // IMPORTANT: we ONLY write to supplier_org_number, not to any UUID column.
+    const { data: doc, error: docErr } = await supabase
+      .from("document")
+      .insert({
+        // org number from the form (123456789 etc)
+        supplier_org_number: Number(orgId),
 
+        // simple placeholder values for now
+        total_amount: null,
+        currency: "NOK",
+        co2_kg: null,
+        fuel_liters: null,
+        issue_date: null,
+
+        // keep a reference to the file path
+        external_id: filePath,
+      })
+      .select("*")
+      .single();
 
     if (docErr) {
       console.error("document insert error", docErr);
-      res.status(500).json({ error: docErr.message ?? "Insert failed" });
+      res
+        .status(500)
+        .json({ error: docErr.message ?? "Insert failed" });
       return;
     }
 
