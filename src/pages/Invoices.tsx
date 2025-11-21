@@ -107,21 +107,31 @@ export default function InvoicesPage() {
       }
 
       // 2) Call API to process invoice (extract text + save + CO2)
-      const res = await fetch("/api/process-invoice", {
+            const res = await fetch("/api/process-invoice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ orgId, filePath }),
       });
 
-      const body = await res.json().catch(() => ({} as any));
+      // Read raw text so we can see HTML / error pages too
+      const text = await res.text();
 
       if (!res.ok) {
-        console.error("API error:", body);
+        console.error("API error:", res.status, res.statusText, text);
         setUploadStatus(
-          "Processing failed: " + JSON.stringify(body, null, 2)
+          `Processing failed: status ${res.status} ${res.statusText}\n${text}`
         );
         return;
       }
+
+      // Try to parse JSON if it is JSON
+      let body: any = {};
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        body = {};
+      }
+
 
       setUploadStatus("Success! Invoice scanned and saved.");
       setSelectedFile(null);
