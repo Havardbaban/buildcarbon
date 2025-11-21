@@ -1,326 +1,78 @@
-// src/pages/Invoices.tsx
-
-import React, {
-  useEffect,
-  useState,
-  ChangeEvent,
-  FormEvent,
-} from "react";
-import { useNavigate } from "react-router-dom";
-import supabase from "../lib/supabase";
-
-type DocumentRow = {
-  id: string;
-  org_id: string;
-  issue_date: string | null;
-  total_amount: number | null;
-  currency: string | null;
-  co2_kg: number | null;
-  fuel_liters: number | null;
-};
-
-function formatNumber(value: number | null | undefined) {
-  if (value === null || value === undefined) return "-";
-  return value.toLocaleString("nb-NO", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) return "-";
-  try {
-    const d = new Date(value);
-    return d.toLocaleDateString("nb-NO");
-  } catch {
-    return value;
-  }
-}
+import { useState } from "react";
+import InvoiceUpload from "../components/InvoiceUpload";
+import InvoiceTable from "../components/InvoiceTable";
 
 export default function InvoicesPage() {
-  const navigate = useNavigate();
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [docs, setDocs] = useState<DocumentRow[]>([]);
-
-  // upload + scan state
-  const [orgId, setOrgId] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploadStatus, setUploadStatus] = useState<string>("");
-
-  // -------- load existing documents --------
-
-  const loadDocuments = async () => {
-    setLoading(true);
-    setError(null);
-
-    const { data, error } = await supabase
-      .from("document")
-      .select("*")
-      .order("issue_date", { ascending: false });
-
-    if (error) {
-      console.error("Error loading documents:", error);
-      setError(error.message ?? "Unknown error");
-      setDocs([]);
-    } else {
-      setDocs((data || []) as DocumentRow[]);
-    }
-
-    setLoading(false);
+  const handleUploadComplete = () => {
+    setRefreshKey(prev => prev + 1);
   };
-
-  useEffect(() => {
-    loadDocuments();
-  }, []);
-
-  // -------- upload + scan handlers --------
-
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null;
-    setSelectedFile(file);
-  };
-
-  const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-
-    if (!orgId || !selectedFile) {
-      setUploadStatus("Please enter org ID and choose a PDF file.");
-      return;
-    }
-
-    try {
-      setUploadStatus("Uploading and scanning...");
-
-      // 1) Upload file to Supabase Storage bucket "invoices"
-      const filePath = `${orgId}/${Date.now()}-${selectedFile.name}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("invoices")
-        .upload(filePath, selectedFile);
-
-      if (uploadError) {
-        console.error("Upload error:", uploadError);
-        setUploadStatus("Upload failed: " + uploadError.message);
-        return;
-      }
-
-      // 2) Call API to process invoice (extract text + save + CO2)
-            const res = await fetch("/api/process-invoice", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orgId, filePath }),
-      });
-
-      // Read raw text so we can see HTML / error pages too
-      const text = await res.text();
-
-      if (!res.ok) {
-        console.error("API error:", res.status, res.statusText, text);
-        setUploadStatus(
-          `Processing failed: status ${res.status} ${res.statusText}\n${text}`
-        );
-        return;
-      }
-
-      // Try to parse JSON if it is JSON
-      let body: any = {};
-      try {
-        body = text ? JSON.parse(text) : {};
-      } catch {
-        body = {};
-      }
-
-
-      setUploadStatus("Success! Invoice scanned and saved.");
-      setSelectedFile(null);
-
-      // 3) Refresh table
-      await loadDocuments();
-    } catch (err: any) {
-      console.error("Unexpected upload error:", err);
-      setUploadStatus(
-        "Unexpected error: " + (err?.message ?? String(err))
-      );
-    }
-  };
-
-  // -------- render --------
 
   return (
-    <div style={{ padding: 24, maxWidth: 1000, margin: "0 auto" }}>
-      <button
-        onClick={() => navigate("/")}
-        style={{ marginBottom: 16, padding: "4px 12px" }}
-      >
-        ← Back
-      </button>
+    <main className="mx-auto max-w-6xl px-4 py-8">
+      <h1 className="text-3xl font-bold mb-2">Invoice Scanner</h1>
+      <p className="text-slate-600 mb-8">
+        Upload invoices (PDF or images) to automatically extract vendor info, amounts, and calculate CO2 emissions.
+      </p>
 
-      <h1 style={{ fontSize: 24, marginBottom: 16 }}>Invoices</h1>
-
-      {/* Upload & scan form */}
-      <form onSubmit={handleUpload} style={{ marginBottom: 24 }}>
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            Org ID:&nbsp;
-            <input
-              type="text"
-              value={orgId}
-              onChange={(e) => setOrgId(e.target.value)}
-              style={{ padding: 6, width: 220 }}
-              placeholder="e.g. 123456789"
-            />
-          </label>
+      <div className="grid lg:grid-cols-3 gap-6 mb-8">
+        <div className="lg:col-span-1">
+          <InvoiceUpload onUploadComplete={handleUploadComplete} />
         </div>
 
-        <div style={{ marginBottom: 8 }}>
-          <label>
-            Invoice PDF:&nbsp;
-            <input
-              type="file"
-              accept="application/pdf"
-              onChange={handleFileChange}
-            />
-          </label>
+        <div className="lg:col-span-2">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6">
+            <h2 className="text-lg font-semibold mb-3">How it works</h2>
+            <ol className="space-y-3 text-sm text-slate-700">
+              <li className="flex gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold">
+                  1
+                </span>
+                <div>
+                  <strong>Upload</strong> your invoice as a PDF or image file
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold">
+                  2
+                </span>
+                <div>
+                  <strong>OCR processing</strong> extracts text using Tesseract.js
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold">
+                  3
+                </span>
+                <div>
+                  <strong>Smart extraction</strong> identifies vendor, invoice number, date, and total
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold">
+                  4
+                </span>
+                <div>
+                  <strong>CO2 calculation</strong> automatically estimates emissions based on energy/fuel usage
+                </div>
+              </li>
+            </ol>
+
+            <div className="mt-6 pt-6 border-t border-slate-200">
+              <h3 className="text-sm font-semibold mb-2">CO2 Emission Factors</h3>
+              <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                <div>Electricity: 0.028 kg CO2/kWh</div>
+                <div>Diesel: 2.68 kg CO2/liter</div>
+                <div>Petrol: 2.31 kg CO2/liter</div>
+                <div>Gas: 2.0 kg CO2/m³</div>
+              </div>
+            </div>
+          </div>
         </div>
+      </div>
 
-        <button type="submit" style={{ padding: "6px 16px" }}>
-          Upload &amp; Scan
-        </button>
-
-        {uploadStatus && (
-          <pre
-            style={{
-              marginTop: 8,
-              fontSize: 14,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {uploadStatus}
-          </pre>
-        )}
-      </form>
-
-      {error && (
-        <div style={{ color: "red", marginBottom: 12 }}>
-          Error: {error}
-        </div>
-      )}
-
-      {loading ? (
-        <div>Loading invoices...</div>
-      ) : docs.length === 0 ? (
-        <div>No invoices yet.</div>
-      ) : (
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            fontSize: 14,
-          }}
-        >
-          <thead>
-            <tr>
-              <th
-                style={{
-                  textAlign: "left",
-                  borderBottom: "1px solid #ddd",
-                  padding: 8,
-                }}
-              >
-                Issue date
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  borderBottom: "1px solid #ddd",
-                  padding: 8,
-                }}
-              >
-                Org ID
-              </th>
-              <th
-                style={{
-                  textAlign: "right",
-                  borderBottom: "1px solid #ddd",
-                  padding: 8,
-                }}
-              >
-                Total amount
-              </th>
-              <th
-                style={{
-                  textAlign: "right",
-                  borderBottom: "1px solid #ddd",
-                  padding: 8,
-                }}
-              >
-                CO₂ (kg)
-              </th>
-              <th
-                style={{
-                  textAlign: "right",
-                  borderBottom: "1px solid #ddd",
-                  padding: 8,
-                }}
-              >
-                Fuel (liters)
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {docs.map((doc) => (
-              <tr key={doc.id}>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                  }}
-                >
-                  {formatDate(doc.issue_date)}
-                </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                  }}
-                >
-                  {doc.org_id}
-                </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                    textAlign: "right",
-                  }}
-                >
-                  {formatNumber(doc.total_amount)}{" "}
-                  {doc.currency || ""}
-                </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                    textAlign: "right",
-                  }}
-                >
-                  {formatNumber(doc.co2_kg)}
-                </td>
-                <td
-                  style={{
-                    padding: 8,
-                    borderBottom: "1px solid #eee",
-                    textAlign: "right",
-                  }}
-                >
-                  {formatNumber(doc.fuel_liters)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
+      <InvoiceTable refresh={refreshKey} />
+    </main>
   );
 }
