@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import processInvoiceUpload from "../src/lib/processInvoiceUpload"; // uses your existing helper
+import { processInvoiceUpload } from "../src/lib/processInvoiceUpload"; // ⬅ named import
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -16,7 +16,7 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  // Safely parse JSON body (on Vercel this may be a string)
+  // Safely parse JSON body (might arrive as a string)
   let parsedBody: any = {};
   try {
     if (typeof req.body === "string") {
@@ -61,15 +61,15 @@ export default async function handler(req: any, res: any) {
       supabase,
       orgId,
       invoiceText: text,
-      lines: [], // we still skip manual line items for now
+      lines: [], // still no manual line items
     });
 
     res.status(200).json({ ok: true, result });
   } catch (e: any) {
     console.error("PROCESS ERROR:", e);
-    res
-      .status(500)
-      .json({ error: e?.message ?? String(e) ?? "Unexpected processing error" });
+    res.status(500).json({
+      error: e?.message ?? String(e) ?? "Unexpected processing error",
+    });
   }
 }
 
