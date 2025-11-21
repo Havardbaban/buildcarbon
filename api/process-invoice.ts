@@ -1,5 +1,4 @@
 import { createClient } from "@supabase/supabase-js";
-import { processInvoiceUpload } from "../src/lib/processInvoiceUpload";
 
 // Use your real Vercel env vars
 const supabaseUrl = process.env.VITE_SUPABASE_URL!;
@@ -44,61 +43,44 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    // 1) Download file from Supabase Storage (bucket: "invoices")
+    // OPTIONAL: you can verify the file exists in Storage if you want
     const { data: fileData, error: fileErr } = await supabase.storage
       .from("invoices")
       .download(filePath);
 
     if (fileErr || !fileData) {
       console.error("storage download error", fileErr);
-      res.status(500).json({ error: "Could not download file" });
+      res.status(500).json({ error: "Could not download file from storage" });
       return;
     }
 
-    const buffer = await toBuffer(fileData);
+    // 2) Insert a simple document row.
+    // For now we just store org + file info; parsing/CO2 can be added later.
+    const { data: doc, error: docErr } = await supabase
+      .from("document")
+      .insert({
+        org_id: orgId,
+        total_amount: null,
+        currency: "NOK",
+        co2_kg: null,
+        fuel_liters: null,
+        issue_date: null,
+        external_id: filePath, // so you know which file belongs to this row
+      })
+      .select("*")
+      .single();
 
-    // 2) Extract text from PDF
-    const text = await extractTextFromPDF(buffer);
+    if (docErr) {
+      console.error("document insert error", docErr);
+      res.status(500).json({ error: docErr.message ?? "Insert failed" });
+      return;
+    }
 
-    // 3) Use your existing pipeline to parse + save + calculate CO2
-    const result = await processInvoiceUpload({
-      supabase,
-      orgId,
-      invoiceText: text,
-      // NOTE: removed "lines" to match ProcessInvoiceArgs type
-    });
-
-    res.status(200).json({ ok: true, result });
+    res.status(200).json({ ok: true, document: doc });
   } catch (e: any) {
     console.error("PROCESS ERROR:", e);
     res.status(500).json({
       error: e?.message ?? String(e) ?? "Unexpected processing error",
     });
   }
-}
-
-// ------------- helpers -------------
-
-async function toBuffer(data: any): Promise<Buffer> {
-  // Browser-like Blob case
-  if (data && typeof data.arrayBuffer === "function") {
-    const ab = await data.arrayBuffer();
-    return Buffer.from(ab);
-  }
-
-  // Node stream case (Supabase on Vercel)
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of data as any) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
-}
-
-async function extractTextFromPDF(buffer: Buffer): Promise<string> {
-  // Dynamic import so module errors happen inside our try/catch
-  // @ts-ignore – pdf-parse has no TS types by default
-  const pdfParse = (await import("pdf-parse")).default as any;
-
-  const data = await pdfParse(buffer);
-  return data?.text || "";
 }
