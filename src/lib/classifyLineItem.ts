@@ -15,23 +15,54 @@ export type LineCo2Result = {
   emissionFactorId: string | null;
   co2Kg: number | null;
   co2Source: string | null;
+  category: string | null;
+  esgScope: number | null;
 };
 
-// Keyword rules to map descriptions to product categories by name
-const CATEGORY_RULES: { name: string; keywords: string[] }[] = [
-  { name: "Diesel Fuel", keywords: ["diesel"] },
-  { name: "Petrol Fuel", keywords: ["bensin", "petrol", "gasoline"] },
-  { name: "Electricity", keywords: ["strøm", "strom", "electricity", "power", "kwh"] },
-  { name: "Laptop Computer", keywords: ["laptop", "pc", "notebook", "macbook"] },
-  { name: "Frozen Fries", keywords: ["fries", "frites", "pommes", "pommes frites"] },
+// Keyword rules to map descriptions to product categories with ESG scope
+const CATEGORY_RULES: {
+  name: string;
+  keywords: string[];
+  category: string;
+  esgScope: 1 | 2 | 3;
+}[] = [
+  // Scope 1: Direct emissions from owned/controlled sources
+  { name: "Diesel Fuel", keywords: ["diesel"], category: "fuel_diesel", esgScope: 1 },
+  { name: "Petrol Fuel", keywords: ["bensin", "petrol", "gasoline"], category: "fuel_petrol", esgScope: 1 },
+  { name: "Natural Gas", keywords: ["natural gas", "gass", "naturgass"], category: "fuel_gas", esgScope: 1 },
+  { name: "Company Vehicle", keywords: ["company car", "firmabil", "fleet"], category: "vehicle_owned", esgScope: 1 },
+
+  // Scope 2: Indirect emissions from purchased energy
+  { name: "Electricity", keywords: ["strøm", "strom", "electricity", "power", "kwh"], category: "electricity", esgScope: 2 },
+  { name: "District Heating", keywords: ["fjernvarme", "district heat", "heating"], category: "heating", esgScope: 2 },
+  { name: "District Cooling", keywords: ["fjernkjøling", "district cool", "cooling"], category: "cooling", esgScope: 2 },
+
+  // Scope 3: Indirect emissions in value chain
+  { name: "Flight Travel", keywords: ["flight", "fly", "airline", "airfare"], category: "travel_flight", esgScope: 3 },
+  { name: "Train Travel", keywords: ["train", "tog", "railway", "rail"], category: "travel_train", esgScope: 3 },
+  { name: "Taxi/Ride", keywords: ["taxi", "uber", "lyft", "drosje"], category: "travel_taxi", esgScope: 3 },
+  { name: "Hotel Stay", keywords: ["hotel", "hotell", "accommodation"], category: "travel_hotel", esgScope: 3 },
+  { name: "Waste Disposal", keywords: ["waste", "avfall", "garbage", "trash"], category: "waste", esgScope: 3 },
+  { name: "Purchased Goods", keywords: ["purchase", "innkjøp", "material", "supplies"], category: "goods", esgScope: 3 },
+  { name: "Laptop Computer", keywords: ["laptop", "pc", "notebook", "macbook"], category: "electronics", esgScope: 3 },
+  { name: "Frozen Fries", keywords: ["fries", "frites", "pommes", "pommes frites"], category: "food", esgScope: 3 },
+  { name: "Transportation", keywords: ["transport", "shipping", "delivery", "freight"], category: "transport", esgScope: 3 },
 ];
 
-function pickCategoryName(description: string | null | undefined): string | null {
+function pickCategoryInfo(description: string | null | undefined): {
+  name: string;
+  category: string;
+  esgScope: 1 | 2 | 3;
+} | null {
   if (!description) return null;
   const text = description.toLowerCase();
   for (const rule of CATEGORY_RULES) {
     if (rule.keywords.some((kw) => text.includes(kw))) {
-      return rule.name;
+      return {
+        name: rule.name,
+        category: rule.category,
+        esgScope: rule.esgScope,
+      };
     }
   }
   return null;
@@ -114,16 +145,21 @@ export async function enrichLineWithCo2(
   let emissionFactorId: string | null = null;
   let co2Kg: number | null = null;
   let co2Source: string | null = null;
+  let category: string | null = null;
+  let esgScope: number | null = null;
 
-  // 1) Figure out which product category name fits the description
-  const categoryName = pickCategoryName(line.description || null);
+  // 1) Figure out which product category info fits the description
+  const categoryInfo = pickCategoryInfo(line.description || null);
 
-  if (categoryName) {
+  if (categoryInfo) {
+    category = categoryInfo.category;
+    esgScope = categoryInfo.esgScope;
+
     // 2) Look up the product_category row by name
     const { data: categories, error: catError } = await supabase
       .from("product_category")
       .select("id")
-      .eq("name", categoryName)
+      .eq("name", categoryInfo.name)
       .limit(1);
 
     if (!catError && categories && categories.length > 0) {
@@ -166,5 +202,7 @@ export async function enrichLineWithCo2(
     emissionFactorId,
     co2Kg,
     co2Source,
+    category,
+    esgScope,
   };
 }

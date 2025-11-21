@@ -3,6 +3,7 @@ import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
+import { parseInvoiceLines } from "../lib/parseInvoiceLines";
 
 type InvoiceData = {
   vendor: string | null;
@@ -174,24 +175,56 @@ export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?:
 
       setProgress("Saving to database...");
 
-      const { error: dbError } = await supabase.from("invoices").insert({
-        filename: file.name,
-        storage_path: storagePath,
-        public_url: urlData.publicUrl,
-        status: "parsed",
-        ocr_text: ocrText,
-        vendor: invoiceData.vendor,
-        invoice_no: invoiceData.invoiceNo,
-        invoice_date: invoiceData.invoiceDate,
-        total: invoiceData.total,
-        currency: invoiceData.currency,
-        total_co2_kg: invoiceData.totalCo2Kg,
-      });
+      const { data: invoiceRow, error: dbError } = await supabase
+        .from("invoices")
+        .insert({
+          filename: file.name,
+          storage_path: storagePath,
+          public_url: urlData.publicUrl,
+          status: "parsed",
+          ocr_text: ocrText,
+          vendor: invoiceData.vendor,
+          invoice_no: invoiceData.invoiceNo,
+          invoice_date: invoiceData.invoiceDate,
+          total: invoiceData.total,
+          currency: invoiceData.currency,
+          total_co2_kg: invoiceData.totalCo2Kg,
+        })
+        .select("id")
+        .single();
 
       if (dbError) {
         setError(`Database error: ${dbError.message}`);
         setUploading(false);
         return;
+      }
+
+      const invoiceId = invoiceRow?.id;
+
+      if (invoiceId) {
+        setProgress("Parsing line items with ESG classification...");
+
+        const lineItems = parseInvoiceLines(ocrText);
+
+        if (lineItems.length > 0) {
+          const linesToInsert = lineItems.map((line) => ({
+            invoice_id: invoiceId,
+            line_number: line.lineNumber,
+            description: line.description,
+            quantity: line.quantity,
+            unit_price: line.unitPrice,
+            amount: line.amount,
+            category: line.category,
+            esg_scope: line.esgScope,
+            co2_kg: line.co2Kg,
+          }));
+
+          const { error: linesError } = await supabase.from("invoice_lines").insert(linesToInsert);
+
+          if (linesError) {
+            console.error("Failed to insert line items:", linesError);
+          }
+        }
       }
 
       setProgress("Invoice processed successfully!");
