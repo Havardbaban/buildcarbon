@@ -1,6 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 import { processInvoiceUpload } from "../src/lib/processInvoiceUpload";
-import pdfParse from "pdf-parse";
 
 // Use your real Vercel env vars
 const supabaseUrl = process.env.VITE_SUPABASE_URL!;
@@ -66,7 +65,7 @@ export default async function handler(req: any, res: any) {
       supabase,
       orgId,
       invoiceText: text,
-      lines: [], // still no manual line items
+      // NOTE: removed "lines" to match ProcessInvoiceArgs type
     });
 
     res.status(200).json({ ok: true, result });
@@ -96,7 +95,10 @@ async function toBuffer(data: any): Promise<Buffer> {
 }
 
 async function extractTextFromPDF(buffer: Buffer): Promise<string> {
-  const pdfParse = (await import("pdf-parse")).default;
+  // Dynamic import so module errors happen inside our try/catch
+  // @ts-ignore – pdf-parse has no TS types by default
+  const pdfParse = (await import("pdf-parse")).default as any;
+
   const data = await pdfParse(buffer);
-  return data.text || "";
+  return data?.text || "";
 }
