@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { processInvoiceUpload } from "../src/lib/processInvoiceUpload";
+import processInvoiceUpload from "../src/lib/processInvoiceUpload"; // uses your existing helper
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -16,7 +16,20 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  const { orgId, filePath } = (req.body || {}) as {
+  // Safely parse JSON body (on Vercel this may be a string)
+  let parsedBody: any = {};
+  try {
+    if (typeof req.body === "string") {
+      parsedBody = JSON.parse(req.body);
+    } else if (req.body) {
+      parsedBody = req.body;
+    }
+  } catch (e) {
+    console.error("Failed to parse body:", e);
+    parsedBody = {};
+  }
+
+  const { orgId, filePath } = parsedBody as {
     orgId?: string;
     filePath?: string;
   };
@@ -48,7 +61,7 @@ export default async function handler(req: any, res: any) {
       supabase,
       orgId,
       invoiceText: text,
-      lines: [], // still no separate line items here
+      lines: [], // we still skip manual line items for now
     });
 
     res.status(200).json({ ok: true, result });
@@ -56,7 +69,7 @@ export default async function handler(req: any, res: any) {
     console.error("PROCESS ERROR:", e);
     res
       .status(500)
-      .json({ error: e?.message ?? "Unexpected processing error" });
+      .json({ error: e?.message ?? String(e) ?? "Unexpected processing error" });
   }
 }
 
