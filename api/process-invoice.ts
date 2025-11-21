@@ -55,20 +55,19 @@ export default async function handler(req: any, res: any) {
     }
 
     // 2) Insert a simple document row.
-    // For now we just store org + file info; parsing/CO2 can be added later.
-    const { data: doc, error: docErr } = await supabase
-      .from("document")
-      .insert({
-        org_id: orgId,
-        total_amount: null,
-        currency: "NOK",
-        co2_kg: null,
-        fuel_liters: null,
-        issue_date: null,
-        external_id: filePath, // so you know which file belongs to this row
-      })
-      .select("*")
-      .single();
+   const { data: docRows, error: docError } = await supabase
+  .from("document")
+  .insert({
+    supplier_org_number: Number(orgId),   // ✅ correct place
+    total_amount: parsed.total ?? null,
+    currency: parsed.currency ?? "NOK",
+    co2_kg: parsed.co2 ?? null,
+    fuel_liters: parsed.fuelLiters ?? null,
+    issue_date: parsed.dateISO ?? null,
+  })
+  .select("id")
+  .single();
+
 
     if (docErr) {
       console.error("document insert error", docErr);
