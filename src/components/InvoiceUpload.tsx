@@ -32,6 +32,7 @@ function extractInvoiceData(text: string): InvoiceData {
   let currency = "NOK";
   let totalCo2Kg: number | null = null;
 
+  // Vendor
   for (let i = 0; i < Math.min(10, lines.length); i++) {
     const line = lines[i].trim();
     if (line.length > 5 && /[A-Z]/.test(line) && !vendor) {
@@ -40,16 +41,22 @@ function extractInvoiceData(text: string): InvoiceData {
     }
   }
 
+  // Invoice number
   const invoiceMatch = text.match(/(?:invoice|faktura)\s*(?:no|nr)?[:\s]*([A-Z0-9\-]+)/i);
   if (invoiceMatch) invoiceNo = invoiceMatch[1];
 
+  // Date
   const dateMatch = text.match(/(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})/);
   if (dateMatch) {
     const [, day, month, year] = dateMatch;
     const fullYear = year.length === 2 ? `20${year}` : year;
-    invoiceDate = `${fullYear}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    invoiceDate = `${fullYear}-${month.padStart(2, "0")}-${day.padStart(
+      2,
+      "0"
+    )}`;
   }
 
+  // Amount
   const amountMatches = text.match(/(?:total|sum|beløp)[:\s]*(?:NOK|kr)?\s*([\d\s,.]+)/gi);
   if (amountMatches) {
     for (const match of amountMatches) {
@@ -61,6 +68,7 @@ function extractInvoiceData(text: string): InvoiceData {
     }
   }
 
+  // CO2 detection
   if (lowerText.includes("kwh") || lowerText.includes("electricity") || lowerText.includes("strøm")) {
     const kwhMatch = text.match(/([\d\s,.]+)\s*kwh/i);
     if (kwhMatch) {
@@ -73,24 +81,24 @@ function extractInvoiceData(text: string): InvoiceData {
     const literMatch = text.match(/([\d\s,.]+)\s*(?:liter|l)\b/i);
     if (literMatch) {
       const liters = parseFloat(literMatch[1].replace(/\s/g, "").replace(",", "."));
-      if (!isNaN(liters)) {
-        totalCo2Kg = liters * CO2_EMISSION_FACTORS.diesel;
-      }
+      totalCo2Kg = liters * CO2_EMISSION_FACTORS.diesel;
     }
   } else if (lowerText.includes("petrol") || lowerText.includes("bensin")) {
     const literMatch = text.match(/([\d\s,.]+)\s*(?:liter|l)\b/i);
     if (literMatch) {
       const liters = parseFloat(literMatch[1].replace(/\s/g, "").replace(",", "."));
-      if (!isNaN(liters)) {
-        totalCo2Kg = liters * CO2_EMISSION_FACTORS.petrol;
-      }
+      totalCo2Kg = liters * CO2_EMISSION_FACTORS.petrol;
     }
   }
 
   return { vendor, invoiceNo, invoiceDate, total, currency, totalCo2Kg };
 }
 
-export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?: () => void }) {
+export default function InvoiceUpload({
+  onUploadComplete,
+}: {
+  onUploadComplete?: () => void;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState("");
@@ -106,7 +114,7 @@ export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?:
 
   const processInvoice = useCallback(async () => {
     if (!file) {
-      setError("Please select a file");
+      setError("Please select a file.");
       return;
     }
 
@@ -115,57 +123,60 @@ export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?:
     setProgress("Uploading file...");
 
     try {
+      // Unique file name
       const fileId = uuidv4();
       const fileExt = file.name.split(".").pop();
       const storagePath = `invoices/${fileId}.${fileExt}`;
 
+      // ⛔ FIXED — correct bucket name
       const { error: uploadError } = await supabase.storage
-        .from("INVOICES")
+        .from("invoices")
         .upload(storagePath, file);
 
       if (uploadError) {
+        console.error("Supabase upload error:", uploadError);
+
         if (uploadError.message.includes("not found") || uploadError.message.includes("bucket")) {
-          setError("Storage bucket 'invoices' not found. Please create it in Supabase Dashboard > Storage with public access.");
+          setError(
+            "Storage bucket 'invoices' not found. Check Supabase Dashboard > Storage and ensure it is public."
+          );
         } else {
           setError(`Upload failed: ${uploadError.message}`);
         }
+
         setUploading(false);
         return;
       }
 
       const { data: urlData } = supabase.storage
-        .from("INVOICES")
+        .from("invoices")
         .getPublicUrl(storagePath);
 
       setProgress("Processing file with OCR...");
 
       let ocrText = "";
 
+      // OCR handling
       if (file.type === "application/pdf") {
-        const imageBlobs = await pdfToPngBlobs(file);
-
-        for (let i = 0; i < imageBlobs.length; i++) {
-          setProgress(`Scanning page ${i + 1} of ${imageBlobs.length}...`);
-          const result = await Tesseract.recognize(imageBlobs[i], "eng", {
+        const pages = await pdfToPngBlobs(file);
+        for (let i = 0; i < pages.length; i++) {
+          setProgress(`Scanning page ${i + 1}/${pages.length}...`);
+          const result = await Tesseract.recognize(pages[i], "eng", {
             logger: (m) => {
               if (m.status === "recognizing text") {
-                setProgress(`Scanning page ${i + 1}: ${Math.round(m.progress * 100)}%`);
+                setProgress(
+                  `Scanning page ${i + 1}: ${Math.round(m.progress * 100)}%`
+                );
               }
             },
           });
-          ocrText += result.data.text + "\n\n";
+          ocrText += result.data.text + "\n";
         }
       } else if (file.type.startsWith("image/")) {
-        const result = await Tesseract.recognize(file, "eng", {
-          logger: (m) => {
-            if (m.status === "recognizing text") {
-              setProgress(`Scanning: ${Math.round(m.progress * 100)}%`);
-            }
-          },
-        });
+        const result = await Tesseract.recognize(file, "eng");
         ocrText = result.data.text;
       } else {
-        setError("Unsupported file type. Please upload a PDF or image file.");
+        setError("Unsupported file format. Upload PDF or image.");
         setUploading(false);
         return;
       }
@@ -194,51 +205,48 @@ export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?:
         .single();
 
       if (dbError) {
+        console.error("DB Error:", dbError);
         setError(`Database error: ${dbError.message}`);
         setUploading(false);
         return;
       }
 
-      const invoiceId = invoiceRow?.id;
+      // Line items
+      const lines = parseInvoiceLines(ocrText);
 
-      if (invoiceId) {
-        setProgress("Parsing line items with ESG classification...");
+      if (lines.length > 0) {
+        const insertRows = lines.map((line) => ({
+          invoice_id: invoiceRow.id,
+          line_number: line.lineNumber,
+          description: line.description,
+          quantity: line.quantity,
+          unit_price: line.unitPrice,
+          amount: line.amount,
+          category: line.category,
+          esg_scope: line.esgScope,
+          co2_kg: line.co2Kg,
+        }));
 
-        const lineItems = parseInvoiceLines(ocrText);
+        const { error: lineError } = await supabase
+          .from("invoice_lines")
+          .insert(insertRows);
 
-        if (lineItems.length > 0) {
-          const linesToInsert = lineItems.map((line) => ({
-            invoice_id: invoiceId,
-            line_number: line.lineNumber,
-            description: line.description,
-            quantity: line.quantity,
-            unit_price: line.unitPrice,
-            amount: line.amount,
-            category: line.category,
-            esg_scope: line.esgScope,
-            co2_kg: line.co2Kg,
-          }));
-
-          const { error: linesError } = await supabase.from("invoice_lines").insert(linesToInsert);
-
-          if (linesError) {
-            console.error("Failed to insert line items:", linesError);
-          }
+        if (lineError) {
+          console.error("Failed to save line items:", lineError);
         }
       }
 
       setProgress("Invoice processed successfully!");
       setFile(null);
 
-      if (onUploadComplete) {
-        onUploadComplete();
-      }
+      if (onUploadComplete) onUploadComplete();
 
       setTimeout(() => {
         setProgress("");
         setUploading(false);
-      }, 2000);
+      }, 1500);
     } catch (err: any) {
+      console.error("Fatal error:", err);
       setError(`Error: ${err.message}`);
       setUploading(false);
     }
@@ -249,24 +257,12 @@ export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?:
       <h2 className="text-lg font-semibold mb-4">Upload Invoice</h2>
 
       <div className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
-            Select Invoice (PDF or Image)
-          </label>
-          <input
-            type="file"
-            accept="application/pdf,image/*"
-            onChange={handleFileChange}
-            disabled={uploading}
-            className="block w-full text-sm text-slate-500
-              file:mr-4 file:py-2 file:px-4
-              file:rounded-xl file:border-0
-              file:text-sm file:font-semibold
-              file:bg-green-50 file:text-green-700
-              hover:file:bg-green-100
-              disabled:opacity-50"
-          />
-        </div>
+        <input
+          type="file"
+          accept="application/pdf,image/*"
+          onChange={handleFileChange}
+          disabled={uploading}
+        />
 
         {file && (
           <div className="text-sm text-slate-600">
@@ -289,24 +285,10 @@ export default function InvoiceUpload({ onUploadComplete }: { onUploadComplete?:
         <button
           onClick={processInvoice}
           disabled={!file || uploading}
-          className="w-full rounded-xl px-4 py-3 bg-green-600 text-white font-medium
-            hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed
-            transition-colors"
+          className="w-full rounded-xl px-4 py-3 bg-green-600 text-white font-medium hover:bg-green-700 disabled:opacity-50"
         >
           {uploading ? "Processing..." : "Upload & Scan Invoice"}
         </button>
-      </div>
-
-      <div className="mt-6 pt-6 border-t border-slate-200">
-        <h3 className="text-sm font-semibold text-slate-700 mb-2">
-          What we extract:
-        </h3>
-        <ul className="text-xs text-slate-600 space-y-1">
-          <li>Vendor name</li>
-          <li>Invoice number and date</li>
-          <li>Total amount</li>
-          <li>Automatic CO2 calculation based on energy/fuel usage</li>
-        </ul>
       </div>
     </div>
   );
