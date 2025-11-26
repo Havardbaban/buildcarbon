@@ -157,6 +157,9 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   // ---------------------------
   // Monetary total
   // ---------------------------
+   // ---------------------------
+  // Monetary total
+  // ---------------------------
   const BAD_LINE = /(kid|kid-?nummer|kontonummer|konto\.?nr|konto\s*nr|iban|swift|bank|kto\.?nr)/i;
   const STRONG_TOTAL = /(beløp\s*å\s*betale|belop\s*a\s*betale|amount\s*due|to\s*pay|sum\s*inkl\.?\s*mva|total\s*inkl\.?\s*mva|total\s*amount|^total\b)/i;
   const MONEY = /(?:NOK|kr|kr\.)?\s*([0-9][0-9 .,\u00A0]{0,15}[0-9])(?:\b|$)/gi;
@@ -175,24 +178,52 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     return null;
   }
 
-  for (const l of lines) {
-    if (BAD_LINE.test(l)) continue;
-    const strong = STRONG_TOTAL.test(l);
-    const val = parseFirstMoneyIn(l);
-    if (val == null) continue;
-
-    if (strong) {
-      if (!fromStrong || (best != null && val !== best)) {
+  // 1) Spesial-case: Heimstaden-stil "Beløp" + tall på neste linje
+  for (let i = 0; i < lines.length - 1; i++) {
+    const current = lines[i].toLowerCase();
+    if (/beløp\b|belop\b/.test(current)) {
+      const val = parseFirstMoneyIn(lines[i + 1]);
+      if (val != null) {
         best = val;
         fromStrong = true;
+        break;
       }
-    } else if (!fromStrong) {
-      if (best == null || val > best) best = val;
+    }
+    if (/beløp\s*å\s*betale|belop\s*a\s*betale/.test(current)) {
+      // Hvis "Beløp å betale" og tallet står på samme eller neste linje
+      const sameLineVal = parseFirstMoneyIn(lines[i]);
+      const nextLineVal = parseFirstMoneyIn(lines[i + 1]);
+      const val = sameLineVal ?? nextLineVal;
+      if (val != null) {
+        best = val;
+        fromStrong = true;
+        break;
+      }
+    }
+  }
+
+  // 2) Generell fallback: finn "sterke" linjer eller største beløp
+  if (best == null) {
+    for (const l of lines) {
+      if (BAD_LINE.test(l)) continue;
+      const strong = STRONG_TOTAL.test(l);
+      const val = parseFirstMoneyIn(l);
+      if (val == null) continue;
+
+      if (strong) {
+        if (!fromStrong || (best != null && val !== best)) {
+          best = val;
+          fromStrong = true;
+        }
+      } else if (!fromStrong) {
+        if (best == null || val > best) best = val;
+      }
     }
   }
 
   if (best != null) out.total = best;
   if (/NOK|kr\b/i.test(full)) out.currency = "NOK";
+
 
   // ---------------------------
   // Activity hints (kWh, liters, m³)
