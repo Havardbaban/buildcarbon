@@ -1,78 +1,99 @@
-import { useState } from "react";
-import InvoiceUpload from "../components/InvoiceUpload";
-import InvoiceTable from "../components/InvoiceTable";
+// src/pages/Invoices.tsx
+import React, { useEffect, useState } from "react";
+import supabase from "../lib/supabase";
 
-export default function InvoicesPage() {
-  const [refreshKey, setRefreshKey] = useState(0);
+type DocumentRow = {
+  id: string;
+  issue_date: string | null;
+  total_amount: number | null;
+  currency: string | null;
+  co2_kg: number | null;
+};
 
-  const handleUploadComplete = () => {
-    setRefreshKey(prev => prev + 1);
-  };
+function formatNumber(value: number | null) {
+  if (value === null || value === undefined) return "-";
+  return value.toLocaleString("nb-NO", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString("nb-NO");
+}
+
+export default function Invoices() {
+  const [rows, setRows] = useState<DocumentRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchDocs = async () => {
+      setLoading(true);
+      setError(null);
+
+      const { data, error } = await supabase
+        .from("document")
+        .select<"*", DocumentRow>("id, issue_date, total_amount, currency, co2_kg")
+        .order("issue_date", { ascending: false });
+
+      if (error) {
+        console.error("Error loading documents", error);
+        setError(error.message);
+      } else {
+        setRows(data || []);
+      }
+
+      setLoading(false);
+    };
+
+    fetchDocs();
+  }, []);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8">
-      <h1 className="text-3xl font-bold mb-2">Invoice Scanner</h1>
-      <p className="text-slate-600 mb-8">
-        Upload invoices (PDF or images) to automatically extract vendor info, amounts, and calculate CO2 emissions.
-      </p>
+    <div className="max-w-5xl mx-auto px-4 py-10">
+      <h1 className="text-2xl font-semibold mb-6">Invoices</h1>
 
-      <div className="grid lg:grid-cols-3 gap-6 mb-8">
-        <div className="lg:col-span-1">
-          <InvoiceUpload onUploadComplete={handleUploadComplete} />
-        </div>
+      {loading && <p>Loading invoices…</p>}
+      {error && <p className="text-red-600">Error: {error}</p>}
 
-        <div className="lg:col-span-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6">
-            <h2 className="text-lg font-semibold mb-3">How it works</h2>
-            <ol className="space-y-3 text-sm text-slate-700">
-              <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold">
-                  1
-                </span>
-                <div>
-                  <strong>Upload</strong> your invoice as a PDF or image file
-                </div>
-              </li>
-              <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold">
-                  2
-                </span>
-                <div>
-                  <strong>OCR processing</strong> extracts text using Tesseract.js
-                </div>
-              </li>
-              <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold">
-                  3
-                </span>
-                <div>
-                  <strong>Smart extraction</strong> identifies vendor, invoice number, date, and total
-                </div>
-              </li>
-              <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold">
-                  4
-                </span>
-                <div>
-                  <strong>CO2 calculation</strong> automatically estimates emissions based on energy/fuel usage
-                </div>
-              </li>
-            </ol>
+      <div className="border rounded-lg overflow-hidden">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-left">Invoice ID</th>
+              <th className="px-4 py-2 text-left">Date</th>
+              <th className="px-4 py-2 text-right">Amount</th>
+              <th className="px-4 py-2 text-right">CO₂ (kg)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && !loading && (
+              <tr>
+                <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                  No invoices found. Upload one on the Invoice Scanner page.
+                </td>
+              </tr>
+            )}
 
-            <div className="mt-6 pt-6 border-t border-slate-200">
-              <h3 className="text-sm font-semibold mb-2">CO2 Emission Factors</h3>
-              <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-                <div>Electricity: 0.028 kg CO2/kWh</div>
-                <div>Diesel: 2.68 kg CO2/liter</div>
-                <div>Petrol: 2.31 kg CO2/liter</div>
-                <div>Gas: 2.0 kg CO2/m³</div>
-              </div>
-            </div>
-          </div>
-        </div>
+            {rows.map((row) => (
+              <tr key={row.id} className="border-t">
+                <td className="px-4 py-2">{row.id}</td>
+                <td className="px-4 py-2">{formatDate(row.issue_date)}</td>
+                <td className="px-4 py-2 text-right">
+                  {row.total_amount !== null
+                    ? `${formatNumber(row.total_amount)} ${row.currency || "NOK"}`
+                    : "-"}
+                </td>
+                <td className="px-4 py-2 text-right">
+                  {row.co_kg !== null ? formatNumber(row.co_kg) : "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-
-      <InvoiceTable refresh={refreshKey} />
-    </main>
+    </div>
   );
 }
