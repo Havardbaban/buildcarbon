@@ -1,92 +1,99 @@
+// src/components/InvoiceUpload.tsx
 import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
 import Tesseract from "tesseract.js";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
 import { parseInvoiceLines } from "../lib/parseInvoiceLines";
-import { ACTIVE_ORG_ID } from "../lib/org"; // <-- Multi-org støtte
+import { ACTIVE_ORG_ID } from "../lib/org";
 
 export default function InvoiceUpload() {
   const [file, setFile] = useState<File | null>(null);
-  const [state, setState] = useState<"idle" | "uploading" | "ocr" | "saving" | "done" | "error">("idle");
+  const [state, setState] = useState<
+    "idle" | "uploading" | "ocr" | "saving" | "done" | "error"
+  >("idle");
   const [progress, setProgress] = useState<string>("");
-
   const [error, setError] = useState<string | null>(null);
 
-  // Handle file selection
   function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] ?? null;
     setFile(f);
     setError(null);
+    setState("idle");
+    setProgress("");
   }
 
-  // Main process
   async function processInvoice() {
     if (!file) {
-      setError("Please select a PDF or image file.");
+      setError("Velg en PDF eller et bilde først.");
       return;
     }
 
-    setState("uploading");
-    setProgress("Uploading file...");
-
     try {
-      // 1. Upload to storage
+      // 1) Last opp til storage
+      setState("uploading");
+      setProgress("Laster opp fil til lagring...");
+
       const ext = file.name.split(".").pop()?.toLowerCase() || "pdf";
-      const path = `invoices/${Date.now()}.${ext}`;
+      const storagePath = `invoices/${Date.now()}.${ext}`;
 
       const { error: uploadError } = await supabase.storage
         .from("invoices")
-        .upload(path, file);
+        .upload(storagePath, file);
 
       if (uploadError) {
-        setError("Upload failed: " + uploadError.message);
+        setError("Opplasting feilet: " + uploadError.message);
         setState("error");
         return;
       }
 
-      // 2. OCR the file
+      // 2) OCR
       setState("ocr");
-      setProgress("Processing OCR...");
+      setProgress("Kjører OCR på faktura...");
 
-      let text = "";
+      let ocrText = "";
+
       if (ext === "pdf") {
         const blobs = await pdfToPngBlobs(file);
         for (let i = 0; i < blobs.length; i++) {
           const result = await Tesseract.recognize(blobs[i], "eng", {
             logger: (m) => {
               if (m.status === "recognizing text") {
-                setProgress(`OCR page ${i + 1}/${blobs.length}: ${Math.round(m.progress * 100)}%`);
+                setProgress(
+                  `Side ${i + 1}/${blobs.length}: ${Math.round(
+                    m.progress * 100
+                  )}%`
+                );
               }
             },
           });
-          text += result.data.text + "\n";
+          ocrText += result.data.text + "\n";
         }
       } else {
         const result = await Tesseract.recognize(file, "eng", {
           logger: (m) => {
             if (m.status === "recognizing text") {
-              setProgress(`Scanning: ${Math.round(m.progress * 100)}%`);
+              setProgress(`Skanner: ${Math.round(m.progress * 100)}%`);
             }
           },
         });
-        text = result.data.text;
+        ocrText = result.data.text;
       }
 
-      // 3. Parse invoice
-      setProgress("Extracting invoice data...");
-      const parsed = await parseInvoiceLines(text);
+      // 3) Parse faktura
+      setProgress("Ekstraherer fakturadata...");
+      const parsed = await parseInvoiceLines(ocrText);
 
-      // 4. Save to database
+      // 4) Lagre i document-tabellen
       setState("saving");
-      setProgress("Saving invoice to database...");
+      setProgress("Lagrer faktura i databasen...");
 
       const { data: doc, error: dbError } = await supabase
         .from("document")
         .insert({
-          org_id: ACTIVE_ORG_ID, // <-- Multi-org
+          org_id: ACTIVE_ORG_ID,
 
-          external_id: path,
-          file_path: path,
+          external_id: storagePath,
+          file_path: storagePath,
 
           supplier_name: parsed.vendor ?? "",
           supplier_orgnr: parsed.orgNumber ?? null,
@@ -104,48 +111,53 @@ export default function InvoiceUpload() {
         .single();
 
       if (dbError) {
-        setError("Database error: " + dbError.message);
+        console.error("DB error:", dbError);
+        setError("Database-feil: " + dbError.message);
         setState("error");
         return;
       }
 
-      console.log("Inserted invoice:", doc);
-
+      console.log("Inserted document:", doc);
       setState("done");
-      setProgress("Invoice processed successfully!");
+      setProgress("Faktura prosessert og lagret!");
       setFile(null);
     } catch (err: any) {
       console.error(err);
-      setError("Unexpected error: " + err.message);
+      setError("Uventet feil: " + (err?.message ?? String(err)));
       setState("error");
     }
   }
 
   return (
-    <div className="p-6 max-w-xl mx-auto">
-      <h2 className="text-2xl font-bold mb-4">Upload Invoice</h2>
-
+    <div className="p-4 border rounded-xl bg-white shadow-sm">
       {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded mb-4">
+        <div className="mb-4 rounded border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      <input type="file" onChange={onFileChange} accept="application/pdf,image/*" />
+      <div className="space-y-3">
+        <input
+          type="file"
+          accept="application/pdf,image/*"
+          onChange={onFileChange}
+        />
 
-      <button
-        onClick={processInvoice}
-        className="mt-4 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-      >
-        Process Invoice
-      </button>
+        <button
+          onClick={processInvoice}
+          className="px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+          disabled={!file || state === "uploading" || state === "ocr" || state === "saving"}
+        >
+          Prosesser faktura
+        </button>
 
-      {state !== "idle" && (
-        <div className="mt-4 p-3 bg-gray-100 rounded">
-          <p>Status: {state}</p>
-          <p>{progress}</p>
-        </div>
-      )}
+        {state !== "idle" && (
+          <div className="mt-2 text-sm text-slate-700">
+            <div>Status: {state}</div>
+            <div>{progress}</div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
