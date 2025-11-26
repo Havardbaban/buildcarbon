@@ -41,7 +41,7 @@ export default function InvoiceUpload({
       const fileExt = file.name.split(".").pop();
       const storagePath = `invoices/${fileId}.${fileExt}`;
 
-      // 1) LAGRE FIL I SUPABASE STORAGE (bucket: invoices)
+      // 1) Last opp fila til Supabase Storage (bucket: invoices)
       const { error: uploadError } = await supabase.storage
         .from("invoices")
         .upload(storagePath, file);
@@ -62,13 +62,9 @@ export default function InvoiceUpload({
         return;
       }
 
-      const { data: urlData } = supabase.storage
-        .from("invoices")
-        .getPublicUrl(storagePath);
-
-      // 2) OCR – hent tekst fra PDF/bilde
       setProgress("Processing file with OCR...");
 
+      // 2) OCR – hent tekst fra PDF eller bilde
       let ocrText = "";
 
       if (file.type === "application/pdf") {
@@ -101,7 +97,7 @@ export default function InvoiceUpload({
         return;
       }
 
-      // 3) Parse faktura-tekst til strukturert data
+      // 3) Parse fakturateksten til strukturert data
       setProgress("Extracting invoice data...");
       const parsed = await parseInvoice(ocrText);
 
@@ -114,8 +110,9 @@ export default function InvoiceUpload({
           {
             // org_id kan være null i MVP
             org_id: null,
-            external_id: fileId,
-            supplier_name: parsed.vendor ?? null,
+            external_id: fileId, // intern referanse til fila
+            supplier_name: parsed.vendor ?? null, // hvis kolonnen heter supplier_name
+            supplier_org_number: parsed.orgNumber ?? null, // hvis denne finnes hos deg
             issue_date: parsed.dateISO ?? null,
             total_amount: parsed.total ?? null,
             currency: parsed.currency ?? "NOK",
@@ -123,9 +120,7 @@ export default function InvoiceUpload({
             energy_kwh: parsed.energyKwh ?? null,
             fuel_liters: parsed.fuelLiters ?? null,
             gas_m3: parsed.gasM3 ?? null,
-            file_path: storagePath,
-            public_url: urlData.publicUrl,
-            ocr_text: ocrText,
+            file_path: storagePath, // eksisterer i tabellen din
           },
         ])
         .select("id")
@@ -140,7 +135,7 @@ export default function InvoiceUpload({
 
       const documentId = docRow?.id as string | undefined;
 
-      // 5) Lagre linjeartikler i `document_line` med CO₂, hvis vi har noen
+      // 5) Lagre linjeartikler i `document_line` med CO₂
       if (documentId && parsed.lines && parsed.lines.length > 0) {
         try {
           await saveDocumentLinesWithCo2(supabase, documentId, parsed.lines);
@@ -154,8 +149,10 @@ export default function InvoiceUpload({
       setProgress("Invoice processed successfully!");
       setFile(null);
 
-      // si ifra til parent (InvoicesPage) at vi er ferdige – den laster listen på nytt
-      if (onUploadComplete) onUploadComplete();
+      // si ifra til parent (InvoicesPage) at vi er ferdige – den laster lista på nytt
+      if (onUploadComplete) {
+        onUploadComplete();
+      }
 
       setTimeout(() => {
         setProgress("");
