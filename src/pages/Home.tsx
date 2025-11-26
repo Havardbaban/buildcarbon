@@ -1,64 +1,74 @@
+// src/pages/Home.tsx
 import { Link } from "react-router-dom";
-import TestSupabase from "../TestSupabase";
 
 export default function Home() {
   return (
-    <div>
+    <main className="bc-section">
+      {/* Hero */}
+      <section className="grid gap-8 md:grid-cols-2 items-center">
+        <div className="space-y-4">
+          <h1 className="text-3xl md:text-4xl font-semibold leading-tight text-slate-900">
+            Gjør <span className="text-emerald-600">fakturaer</span> om til
+            klimarapporter – automatisk.
+          </h1>
+          <p className="text-sm md:text-base text-slate-600">
+            BuildCarbon leser leverandørfakturaer, beregner CO₂-utslipp og
+            bygger banker- og støtteordningsklare rapporter. Ingen Excel. Ingen
+            manuell punching.
+          </p>
 
-      <main className="mx-auto max-w-6xl px-4 py-12">
-        <section className="grid md:grid-cols-2 gap-10 items-center">
-          <div>
-            <h1 className="text-4xl md:text-5xl font-bold leading-tight">
-              Turn sustainability into profit.
-            </h1>
-            <p className="mt-4 text-slate-600 text-lg">
-              Envesto finds cost savings, grants, and carbon reductions—then
-              produces a bank-ready report (NPV, IRR, DSCR, Payback).
-            </p>
-
-            <div className="mt-6 flex flex-wrap gap-3">
-              <Link to="/demo" className="rounded-xl px-5 py-3 text-white" style={{ background: "#0E90FE" }}>
-                Try the Demo
-              </Link>
-              <Link to="/report" className="rounded-xl px-5 py-3 border">New Report Builder</Link>
-              <a href="mailto:hello@envesto.app?subject=Envesto%20Pilot%20Inquiry" className="rounded-xl px-5 py-3 border">
-                Book a Call
-              </a>
-            </div>
+          <div className="flex flex-wrap gap-3 pt-2">
+            <Link
+              to="/upload"
+              className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-700"
+            >
+              Last opp første faktura
+            </Link>
+            <Link
+              to="/dashboard"
+              className="rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Gå til dashboard
+            </Link>
           </div>
 
-          <div className="border rounded-2xl p-6 bg-white">
-            <div className="text-sm text-slate-500 mb-2">What you'll see in the demo</div>
-            <div className="rounded-xl border p-4">
-              <div className="font-semibold">Acme AS — Office Efficiency Upgrade</div>
-              <ul className="mt-2 text-sm text-slate-700 space-y-1">
-                <li>Baseline energy: NOK 100 000 / yr</li>
-                <li>Reduction target: 15 %</li>
-                <li>After-tax savings: ≈ NOK 11 700 / yr</li>
-                <li>Loan tenor: 5 yrs • Discount rate: 8 %</li>
-              </ul>
-              <div className="mt-3 text-xs text-slate-500">
-                Download a multi-page PDF with finance tables and compliance notes.
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="mt-12 grid gap-2 text-sm text-slate-700">
-          <ul className="list-disc ml-6 space-y-1">
-            <li>Financial-grade outputs (NPV, IRR, DSCR, Payback)</li>
-            <li>Opportunities library (what to cut & why)</li>
-            <li>Grants & incentives (coming in MVP)</li>
-            <li>Bank/insurer/tax-ready PDF/CSV</li>
+          <ul className="mt-4 space-y-1 text-sm text-slate-600">
+            <li>• Automatisk CO₂ fra strøm, varme, drivstoff m.m.</li>
+            <li>• Klare grafer for styre, bank og revisor</li>
+            <li>• Dokumentasjon via lenke til original faktura-PDF</li>
           </ul>
-        </section>
+        </div>
 
-        {/* Supabase connection sanity-check */}
-        <section className="mt-12 border-t pt-6">
-          <h2 className="text-xl font-semibold mb-3">Supabase Connection Test</h2>
-          <TestSupabase />
-        </section>
-      </main>
-    </div>
+        <div className="bc-card space-y-4">
+          <h2 className="text-sm font-semibold text-slate-700">
+            Hva du ser i demoen
+          </h2>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700 space-y-1">
+            <div className="font-semibold text-slate-900">
+              Demo Org — Office Efficiency Upgrade
+            </div>
+            <div>Baseline energi: 100 000 kWh / år</div>
+            <div>Reduksjonsmål: 15 %</div>
+            <div>Årlige etter-skatt besparelser: ≈ 11 700 kr</div>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            Alle tall er generert fra ekte fakturaer via MVP-en din. Bruk
+            dem som pitch mot banker, piloter og støtteordninger.
+          </p>
+        </div>
+      </section>
+
+      {/* Supabase-test / info */}
+      <section className="bc-card space-y-2">
+        <h2 className="text-sm font-semibold text-slate-800">
+          Supabase-tilkobling
+        </h2>
+        <p className="text-sm text-slate-600">
+          Demo Org er koblet mot databasen din. Når du laster opp fakturaer,
+          oppdateres tallene i fakturaliste, tiltak, dashboard, ESG og
+          dokumentsiden automatisk.
+        </p>
+      </section>
+    </main>
   );
 }
