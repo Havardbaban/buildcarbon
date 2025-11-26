@@ -1,433 +1,321 @@
 // src/pages/Dashboard.tsx
 
-import { useEffect, useState } from "react";
-import supabase from "../lib/supabase";
+import React, { useEffect, useState, useCallback } from "react";
+import { supabase } from "../lib/supabase";
 
-type InvoiceRow = {
+type DocumentRow = {
   id: string;
-  vendor: string | null;
-  invoice_date: string | null;
-  total: number | null;
+  supplier_name: string | null;
+  issue_date: string | null;
+  total_amount: number | null;
   currency: string | null;
-  total_co2_kg: number | null;
+  co2_kg: number | null;
 };
 
-type MeasureSummary = {
-  totalAnnualNokSave: number;
-  totalAnnualCo2Save: number;
-  totalNPV: number;
+type MonthlyRow = {
+  monthKey: string; // "2025-01"
+  totalCo2: number;
 };
 
-const DISCOUNT_RATE = 0.08; // 8% discount rate, same as Measures page
-
-function calcNPV(
-  annualCashflow: number,
-  years: number,
-  discountRate: number
-): number {
-  if (annualCashflow === 0 || years <= 0) return 0;
-  let npv = 0;
-  for (let t = 1; t <= years; t++) {
-    npv += annualCashflow / Math.pow(1 + discountRate, t);
-  }
-  return npv;
-}
-
-function formatMoney(value: number): string {
-  if (!isFinite(value)) return "—";
+function formatNumber(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "–";
   return value.toLocaleString("nb-NO", {
+    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   });
 }
 
-function formatCo2(value: number): string {
-  if (!isFinite(value)) return "—";
+function formatMoney(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "–";
   return value.toLocaleString("nb-NO", {
-    maximumFractionDigits: 1,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
   });
 }
 
-/**
- * Simple measure summary using same logic as Measures.tsx:
- * - Fuel invoices: 10% potential saving
- * - High CO₂ invoices: additional 5% operational saving
- */
-function summarizeMeasures(docs: InvoiceRow[]): MeasureSummary {
-  let totalAnnualNokSave = 0;
-  let totalAnnualCo2Save = 0;
-  let totalNPV = 0;
-
-  docs.forEach((doc) => {
-    const baseNok = doc.total ?? 0;
-    const baseCo2 = doc.total_co2_kg ?? 0;
-
-    const annualNok = baseNok * 12;
-    const annualCo2 = baseCo2 * 12;
-
-    if (baseCo2 > 100) {
-      const savingPct = 0.1;
-      const capex = 40_000;
-      const lifetimeYears = 5;
-
-      const annualNokSave = annualNok * savingPct;
-      const annualCo2Save = annualCo2 * savingPct;
-
-      const npvGross = calcNPV(annualNokSave, lifetimeYears, DISCOUNT_RATE);
-      const npv = npvGross - capex;
-
-      totalAnnualNokSave += annualNokSave;
-      totalAnnualCo2Save += annualCo2Save;
-      totalNPV += npv;
-    }
-  });
-
-  return { totalAnnualNokSave, totalAnnualCo2Save, totalNPV };
+function formatDate(value: string | null | undefined) {
+  if (!value) return "–";
+  try {
+    const d = new Date(value);
+    return d.toLocaleDateString("nb-NO");
+  } catch {
+    return value;
+  }
 }
-
-type MonthlyPoint = {
-  key: string; // YYYY-MM
-  label: string; // e.g. "Jan 25"
-  totalCo2: number;
-};
 
 export default function DashboardPage() {
-  const [docs, setDocs] = useState<InvoiceRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [docs, setDocs] = useState<DocumentRow[]>([]);
+  const [monthly, setMonthly] = useState<MonthlyRow[]>([]);
+  const [totalEmissions, setTotalEmissions] = useState(0);
+  const [totalSpend, setTotalSpend] = useState(0);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setError(null);
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
 
-      const { data, error } = await supabase.from("invoices").select("*");
+    const { data, error } = await supabase
+      .from("document")
+      .select(
+        "id, supplier_name, issue_date, total_amount, currency, co2_kg"
+      )
+      .order("issue_date", { ascending: true });
 
-      if (error) {
-        console.error("Error loading invoices:", error);
-        setError(error.message ?? "Unknown error");
-        setDocs([]);
-      } else {
-        setDocs((data || []) as InvoiceRow[]);
-      }
-
+    if (error) {
+      console.error("Error loading dashboard data:", error);
+      setError(error.message);
+      setDocs([]);
+      setTotalEmissions(0);
+      setTotalSpend(0);
+      setMonthly([]);
       setLoading(false);
-    };
+      return;
+    }
 
-    load();
+    const rows = (data ?? []) as DocumentRow[];
+    setDocs(rows);
+
+    // Totals
+    const sumCo2 = rows.reduce(
+      (acc, r) => acc + (r.co2_kg ?? 0),
+      0
+    );
+    const sumSpend = rows.reduce(
+      (acc, r) => acc + (r.total_amount ?? 0),
+      0
+    );
+
+    setTotalEmissions(sumCo2);
+    setTotalSpend(sumSpend);
+
+    // Monthly aggregation
+    const monthMap = new Map<string, number>();
+
+    for (const r of rows) {
+      if (!r.issue_date) continue;
+      const d = new Date(r.issue_date);
+      if (Number.isNaN(d.getTime())) continue;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}`;
+      const prev = monthMap.get(key) ?? 0;
+      monthMap.set(key, prev + (r.co2_kg ?? 0));
+    }
+
+    const monthRows: MonthlyRow[] = Array.from(monthMap.entries())
+      .map(([monthKey, totalCo2]) => ({ monthKey, totalCo2 }))
+      .sort((a, b) => (a.monthKey < b.monthKey ? -1 : 1));
+
+    setMonthly(monthRows);
+    setLoading(false);
   }, []);
 
-  const totalInvoices = docs.length;
-  const totalAmount = docs.reduce(
-    (sum, d) => sum + (d.total ?? 0),
-    0
-  );
-  const totalCo2 = docs.reduce((sum, d) => sum + (d.total_co2_kg ?? 0), 0);
-  const currency = docs[0]?.currency ?? "NOK";
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-  const highCo2 = docs
-    .filter((d) => (d.total_co2_kg ?? 0) > 100)
-    .reduce((sum, d) => sum + (d.total_co2_kg ?? 0), 0);
-  const lowCo2 = totalCo2 - highCo2;
-
-  // Measures summary (potential savings)
-  const {
-    totalAnnualNokSave,
-    totalAnnualCo2Save,
-    totalNPV,
-  } = summarizeMeasures(docs);
-
-  const monthlyMap = new Map<string, MonthlyPoint>();
-
-  docs.forEach((doc) => {
-    if (!doc.invoice_date || doc.total_co2_kg == null) return;
-    const date = new Date(doc.invoice_date);
-    if (isNaN(date.getTime())) return;
-
-    const year = date.getFullYear();
-    const month = date.getMonth();
-
-    const key = `${year}-${String(month + 1).padStart(2, "0")}`;
-
-    const label = date.toLocaleDateString("en-GB", {
-      month: "short",
-      year: "2-digit",
-    });
-
-    const existing = monthlyMap.get(key);
-    if (existing) {
-      existing.totalCo2 += doc.total_co2_kg ?? 0;
-    } else {
-      monthlyMap.set(key, {
-        key,
-        label,
-        totalCo2: doc.total_co2_kg ?? 0,
-      });
-    }
-  });
-
-  const monthlySeries = Array.from(monthlyMap.values()).sort((a, b) =>
-    a.key.localeCompare(b.key)
-  );
-
-  const maxMonthlyCo2 =
-    monthlySeries.reduce(
-      (max, m) => (m.totalCo2 > max ? m.totalCo2 : max),
-      0
-    ) || 1;
-
-  const highShare = totalCo2 > 0 ? (highCo2 / totalCo2) * 100 : 0;
-  const lowShare = 100 - highShare;
+  // Enkle MVP-antakelser
+  const REDUCTION_PCT = 0.1;
+  const potentialAnnualSavings = totalSpend * REDUCTION_PCT;
+  const potentialAnnualCo2Reduction = totalEmissions * REDUCTION_PCT;
 
   return (
-    <main className="max-w-6xl mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold mb-2">ESG &amp; Carbon Dashboard</h1>
-      <p className="text-sm text-slate-500 mb-8">
-        Overview of emissions, spend, and savings potential based on uploaded
+    <div className="max-w-6xl mx-auto py-10 space-y-8">
+      <h1 className="text-2xl font-semibold mb-2">ESG & Carbon Dashboard</h1>
+      <p className="text-sm text-slate-600 mb-4">
+        Overview of emissions, spend, and potential savings based on uploaded
         invoices.
       </p>
 
       {error && (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Error: {error}
+        <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+          {error}
         </div>
       )}
 
+      {loading && (
+        <div className="text-sm text-slate-500 mb-4">Loading dashboard…</div>
+      )}
+
       {/* Top summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
-        <div className="rounded-xl border border-gray-200 p-4 bg-white shadow-sm">
-          <p className="text-xs font-semibold uppercase text-slate-500">
-            Total emissions
-          </p>
-          <p className="mt-3 text-2xl font-bold">
-            {formatCo2(totalCo2)} kg
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Based on all invoices in the system.
-          </p>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="text-xs font-medium text-slate-500 mb-1">
+            TOTAL EMISSIONS
+          </div>
+          <div className="text-2xl font-semibold text-slate-900">
+            {formatNumber(totalEmissions)} kg
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            Based on all invoices in the system
+          </div>
         </div>
 
-        <div className="rounded-xl border border-gray-200 p-4 bg-white shadow-sm">
-          <p className="text-xs font-semibold uppercase text-slate-500">
-            Total spend (energy &amp; fuel)
-          </p>
-          <p className="mt-3 text-2xl font-bold">
-            {formatMoney(totalAmount)} {currency}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Sum of invoice totals.
-          </p>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="text-xs font-medium text-slate-500 mb-1">
+            TOTAL SPEND (ENERGY & FUEL)
+          </div>
+          <div className="text-2xl font-semibold text-slate-900">
+            {formatMoney(totalSpend)} NOK
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            Sum of invoice totals
+          </div>
         </div>
 
-        <div className="rounded-xl border border-green-200 p-4 bg-green-50 shadow-sm">
-          <p className="text-xs font-semibold uppercase text-green-700">
-            Potential annual savings
-          </p>
-          <p className="mt-3 text-2xl font-bold text-green-800">
-            {formatMoney(totalAnnualNokSave)} {currency}
-          </p>
-          <p className="mt-1 text-xs text-green-700">
-            From rule-based measures (fuel &amp; operational).
-          </p>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="text-xs font-medium text-slate-500 mb-1">
+            POTENTIAL ANNUAL SAVINGS
+          </div>
+          <div className="text-2xl font-semibold text-slate-900">
+            {formatMoney(potentialAnnualSavings)} NOK
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            Assuming ~10 % reduction in relevant spend
+          </div>
         </div>
 
-        <div className="rounded-xl border border-green-200 p-4 bg-green-50 shadow-sm">
-          <p className="text-xs font-semibold uppercase text-green-700">
-            Potential CO₂ reduction / yr
-          </p>
-          <p className="mt-3 text-2xl font-bold text-green-800">
-            {formatCo2(totalAnnualCo2Save)} kg
-          </p>
-          <p className="mt-1 text-xs text-green-700">
-            If all proposed measures are implemented.
-          </p>
-        </div>
-      </div>
-
-      {/* NPV & overview */}
-      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 mb-8">
-        <p className="font-semibold">
-          Portfolio NPV of proposed measures:{" "}
-          {formatMoney(totalNPV)} {currency}
-        </p>
-        <p className="text-xs mt-1">
-          Calculated with 8% discount rate, simple capex assumptions, and a
-          combination of fuel efficiency and operational optimization
-          measures derived from invoices.
-        </p>
-      </div>
-
-      {/* Middle section: trend + breakdown */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-10">
-        {/* Monthly trend "chart" */}
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm lg:col-span-2">
-          <p className="text-xs font-semibold uppercase text-slate-500 mb-3">
-            Monthly CO₂ trend
-          </p>
-
-          {monthlySeries.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              Not enough dated invoices to show a trend yet.
-            </p>
-          ) : (
-            <div className="flex items-end gap-3 h-40">
-              {monthlySeries.map((m) => {
-                const height = Math.max(
-                  8,
-                  (m.totalCo2 / maxMonthlyCo2) * 120
-                );
-                return (
-                  <div key={m.key} className="flex flex-col items-center gap-1">
-                    <div
-                      className="w-6 rounded-md bg-sky-500"
-                      style={{ height }}
-                    />
-                    <span className="text-[11px] text-slate-500">
-                      {m.label}
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      {formatCo2(m.totalCo2)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <p className="text-xs font-semibold uppercase text-slate-500 mb-3">
-            Emissions breakdown
-          </p>
-
-          <div className="space-y-3">
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-slate-600">
-                  High emissions (&gt;100 kg CO₂)
-                </span>
-                <span className="font-medium text-slate-800">
-                  {formatCo2(highCo2)} kg
-                </span>
-              </div>
-              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-red-500"
-                  style={{ width: `${highShare || 0}%` }}
-                />
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Invoices with significant carbon footprint
-              </p>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-slate-600">
-                  Lower emissions (&lt;100 kg CO₂)
-                </span>
-                <span className="font-medium text-slate-800">
-                  {formatCo2(lowCo2)} kg
-                </span>
-              </div>
-              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-green-500"
-                  style={{ width: `${lowShare || 0}%` }}
-                />
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Invoices with lower carbon footprint
-              </p>
-            </div>
-
-            <div className="pt-2 border-t border-slate-100 mt-2">
-              <p className="text-[11px] text-slate-500">
-                Upload more invoices to get detailed emissions tracking and optimization recommendations.
-              </p>
-            </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="text-xs font-medium text-slate-500 mb-1">
+            POTENTIAL CO₂ REDUCTION / YR
+          </div>
+          <div className="text-2xl font-semibold text-slate-900">
+            {formatNumber(potentialAnnualCo2Reduction)} kg
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            If all proposed measures are implemented
           </div>
         </div>
       </div>
 
-      {/* Invoice / ESG summary table */}
-      <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
-          <p className="text-xs font-semibold uppercase text-slate-500">
-            Invoice-level ESG view
-          </p>
-          <p className="text-xs text-slate-400">
-            {totalInvoices} invoices in dataset
-          </p>
+      {/* Monthly trend & breakdown */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-700 mb-2">
+            Monthly CO₂ trend
+          </h2>
+          {monthly.length === 0 ? (
+            <div className="text-sm text-slate-500">
+              Not enough dated invoices to show a trend yet.
+            </div>
+          ) : (
+            <ul className="text-sm text-slate-700 space-y-1">
+              {monthly.map((m) => (
+                <li
+                  key={m.monthKey}
+                  className="flex justify-between border-b border-slate-100 last:border-b-0 py-1"
+                >
+                  <span>{m.monthKey}</span>
+                  <span>{formatNumber(m.totalCo2)} kg</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-700 mb-2">
+            Emissions breakdown
+          </h2>
+          {totalEmissions <= 0 ? (
+            <div className="text-sm text-slate-500">
+              Upload more invoices to get detailed emissions tracking and
+              optimization recommendations.
+            </div>
+          ) : (
+            <div className="space-y-2 text-sm text-slate-700">
+              <div className="flex justify-between">
+                <span>High emissions (&gt; 100 kg CO₂)</span>
+                <span>
+                  {formatNumber(
+                    docs
+                      .filter((d) => (d.co2_kg ?? 0) > 100)
+                      .reduce((acc, d) => acc + (d.co2_kg ?? 0), 0)
+                  )}{" "}
+                  kg
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Lower emissions (&le; 100 kg CO₂)</span>
+                <span>
+                  {formatNumber(
+                    docs
+                      .filter((d) => (d.co2_kg ?? 0) <= 100)
+                      .reduce((acc, d) => acc + (d.co2_kg ?? 0), 0)
+                  )}{" "}
+                  kg
+                </span>
+              </div>
+              <div className="flex justify-between border-t border-slate-100 pt-2 mt-1">
+                <span>Total</span>
+                <span>{formatNumber(totalEmissions)} kg</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Invoice-level table */}
+      <section>
+        <h2 className="text-xl font-semibold mb-4">Invoice-level ESG view</h2>
+
+        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Vendor
+                <th className="px-4 py-3 text-left font-medium text-slate-600">
+                  Supplier
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className="px-4 py-3 text-left font-medium text-slate-600">
                   Invoice date
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Amount ({currency})
+                <th className="px-4 py-3 text-right font-medium text-slate-600">
+                  Amount (NOK)
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className="px-4 py-3 text-right font-medium text-slate-600">
                   CO₂ (kg)
                 </th>
               </tr>
             </thead>
             <tbody>
-              {loading && (
+              {docs.length === 0 && !loading && (
                 <tr>
                   <td
                     colSpan={4}
-                    className="px-4 py-6 text-center text-slate-500"
+                    className="px-4 py-6 text-center text-sm text-slate-500"
                   >
-                    Loading ESG data…
+                    No invoices found. Upload one on the Invoices page to get
+                    started.
                   </td>
                 </tr>
               )}
 
-              {!loading && docs.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={4}
-                    className="px-4 py-6 text-center text-slate-500"
-                  >
-                    No invoices yet. Upload invoices to see ESG metrics.
+              {docs.map((row) => (
+                <tr key={row.id} className="border-t border-slate-100">
+                  <td className="px-4 py-3 text-slate-800">
+                    {row.supplier_name || "Unknown"}
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">
+                    {formatDate(row.issue_date)}
+                  </td>
+                  <td className="px-4 py-3 text-right text-slate-800">
+                    {row.total_amount !== null
+                      ? `${formatMoney(row.total_amount)} ${
+                          row.currency || "NOK"
+                        }`
+                      : "–"}
+                  </td>
+                  <td className="px-4 py-3 text-right text-slate-800">
+                    {row.co2_kg !== null ? formatNumber(row.co2_kg) : "–"}
                   </td>
                 </tr>
-              )}
-
-              {!loading &&
-                docs.map((d) => {
-                  const dateLabel = d.invoice_date
-                    ? new Date(d.invoice_date).toLocaleDateString("nb-NO")
-                    : "—";
-                  return (
-                    <tr
-                      key={d.id}
-                      className="border-t border-slate-100 align-top"
-                    >
-                      <td className="px-4 py-3 text-sm text-slate-700">
-                        {d.vendor ?? "Unknown"}
-                      </td>
-                      <td className="px-4 py-3 text-sm">{dateLabel}</td>
-                      <td className="px-4 py-3 text-right text-sm">
-                        {formatMoney(d.total ?? 0)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-sm">
-                        {formatCo2(d.total_co2_kg ?? 0)}
-                      </td>
-                    </tr>
-                  );
-                })}
+              ))}
             </tbody>
           </table>
         </div>
-      </div>
-    </main>
+      </section>
+    </div>
   );
 }
