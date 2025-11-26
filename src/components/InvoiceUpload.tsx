@@ -2,29 +2,77 @@
 
 import React, { useState, useCallback } from "react";
 import Tesseract from "tesseract.js";
-import { supabase } from "../lib/supabase";
 import { v4 as uuidv4 } from "uuid";
+
+import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
 import parseInvoice from "../lib/invoiceParser";
 import saveDocumentLinesWithCo2 from "../lib/saveDocumentLinesWithCo2";
 
-export default function InvoiceUpload({
-  onUploadComplete,
-}: {
+type Props = {
   onUploadComplete?: () => void;
-}) {
+};
+
+export default function InvoiceUpload({ onUploadComplete }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
-      setError(null);
-    }
+    const selected = e.target.files?.[0] || null;
+    setFile(selected);
+    setError(null);
+    setProgress("");
   };
+
+  const runOcrOnFile = useCallback(
+    async (f: File): Promise<string> => {
+      let ocrText = "";
+
+      // PDF → konverter sider til PNG, kjør Tesseract per side
+      if (f.type === "application/pdf") {
+        const pages = await pdfToPngBlobs(f);
+
+        for (let i = 0; i < pages.length; i++) {
+          setProgress(`Scanning page ${i + 1}/${pages.length}…`);
+
+          const result = await Tesseract.recognize(pages[i], "eng", {
+            logger: (m) => {
+              if (m.status === "recognizing text") {
+                setProgress(
+                  `Scanning page ${i + 1}/${pages.length}: ${Math.round(
+                    m.progress * 100
+                  )}%`
+                );
+              }
+            },
+          });
+
+          ocrText += result.data.text + "\n";
+        }
+      }
+      // Bilder (PNG/JPG osv.)
+      else if (f.type.startsWith("image/")) {
+        const result = await Tesseract.recognize(f, "eng", {
+          logger: (m) => {
+            if (m.status === "recognizing text") {
+              setProgress(`Scanning: ${Math.round(m.progress * 100)}%`);
+            }
+          },
+        });
+
+        ocrText = result.data.text;
+      } else {
+        throw new Error(
+          "Unsupported file type. Please upload a PDF or image file."
+        );
+      }
+
+      return ocrText;
+    },
+    []
+  );
 
   const processInvoice = useCallback(async () => {
     if (!file) {
@@ -34,100 +82,69 @@ export default function InvoiceUpload({
 
     setUploading(true);
     setError(null);
-    setProgress("Uploading file...");
+    setProgress("Uploading file to storage…");
 
     try {
+      // 1) Last opp fil til Supabase Storage (bucket: invoices)
       const fileId = uuidv4();
-      const fileExt = file.name.split(".").pop();
-      const storagePath = `invoices/${fileId}.${fileExt}`;
+      const ext = file.name.split(".").pop() || "pdf";
+      const storagePath = `invoices/${fileId}.${ext}`;
 
-      // 1) Last opp fila til Supabase Storage (bucket: invoices)
       const { error: uploadError } = await supabase.storage
         .from("invoices")
         .upload(storagePath, file);
 
       if (uploadError) {
-        console.error("Supabase upload error:", uploadError);
-        if (
-          uploadError.message.includes("not found") ||
-          uploadError.message.includes("bucket")
-        ) {
-          setError(
-            "Storage bucket 'invoices' not found. Check Supabase Dashboard > Storage and ensure it is public."
-          );
-        } else {
-          setError(`Upload failed: ${uploadError.message}`);
-        }
+        console.error("Supabase storage upload error:", uploadError);
+        setError(`Upload failed: ${uploadError.message}`);
         setUploading(false);
         return;
       }
 
-      setProgress("Processing file with OCR...");
+      // 2) OCR
+      setProgress("Running OCR on file…");
+      const ocrText = await runOcrOnFile(file);
 
-      // 2) OCR – hent tekst fra PDF eller bilde
-      let ocrText = "";
-
-      if (file.type === "application/pdf") {
-        const pages = await pdfToPngBlobs(file);
-        for (let i = 0; i < pages.length; i++) {
-          setProgress(`Scanning page ${i + 1}/${pages.length}...`);
-          const result = await Tesseract.recognize(pages[i], "eng", {
-            logger: (m) => {
-              if (m.status === "recognizing text") {
-                setProgress(
-                  `Scanning page ${i + 1}: ${Math.round(m.progress * 100)}%`
-                );
-              }
-            },
-          });
-          ocrText += result.data.text + "\n";
-        }
-      } else if (file.type.startsWith("image/")) {
-        const result = await Tesseract.recognize(file, "eng", {
-          logger: (m) => {
-            if (m.status === "recognizing text") {
-              setProgress(`Scanning: ${Math.round(m.progress * 100)}%`);
-            }
-          },
-        });
-        ocrText = result.data.text;
-      } else {
-        setError("Unsupported file type. Please upload a PDF or image file.");
-        setUploading(false);
-        return;
-      }
-
-      // 3) Parse fakturateksten til strukturert data
-      setProgress("Extracting invoice data...");
+      // 3) Parse faktura
+      setProgress("Parsing invoice data…");
       const parsed = await parseInvoice(ocrText);
 
-      // 4) Lagre én rad i `document`
-      setProgress("Saving to database...");
+      // 4) Sett inn rad i document-tabellen
+      setProgress("Saving invoice to database…");
+
+      const supplierOrgNumber = parsed.orgNumber
+        ? Number(parsed.orgNumber)
+        : null;
 
       const { data: docRow, error: docError } = await supabase
         .from("document")
         .insert([
           {
-            // org_id kan være null i MVP
-            org_id: null,
-            external_id: fileId, // intern referanse til fila
-            supplier_name: parsed.vendor ?? null, // hvis kolonnen heter supplier_name
-            supplier_org_number: parsed.orgNumber ?? null, // hvis denne finnes hos deg
+            // metadata
+            supplier_name: parsed.vendor ?? null,
+            supplier_org_number: supplierOrgNumber,
+            invoice_no: parsed.invoiceNumber ?? null,
+
+            // dato og beløp
             issue_date: parsed.dateISO ?? null,
             total_amount: parsed.total ?? null,
             currency: parsed.currency ?? "NOK",
+
+            // aktivitetsdata / klima
             co2_kg: parsed.co2Kg ?? null,
             energy_kwh: parsed.energyKwh ?? null,
             fuel_liters: parsed.fuelLiters ?? null,
             gas_m3: parsed.gasM3 ?? null,
-            file_path: storagePath, // eksisterer i tabellen din
+
+            // referanse til fil i storage
+            file_path: storagePath,
           },
         ])
         .select("id")
         .single();
 
       if (docError) {
-        console.error("DB error on document:", docError);
+        console.error("Failed to insert into document:", docError);
         setError(`Database error: ${docError.message}`);
         setUploading(false);
         return;
@@ -135,21 +152,21 @@ export default function InvoiceUpload({
 
       const documentId = docRow?.id as string | undefined;
 
-      // 5) Lagre linjeartikler i `document_line` med CO₂
+      // 5) Lagre linjeartikler i document_line med beregnet CO₂ (hvis vi fant noen)
       if (documentId && parsed.lines && parsed.lines.length > 0) {
+        setProgress("Saving line items with CO₂ estimates…");
+
         try {
           await saveDocumentLinesWithCo2(supabase, documentId, parsed.lines);
-        } catch (lineErr) {
+        } catch (lineErr: any) {
+          // Ikke krasj hele prosessen om linjer feiler – logg og gå videre
           console.error("Failed to insert document_line rows:", lineErr);
-          // vi stopper ikke hele prosessen, men logger feilen
         }
       }
 
-      // 6) Ferdig!
       setProgress("Invoice processed successfully!");
       setFile(null);
 
-      // si ifra til parent (InvoicesPage) at vi er ferdige – den laster lista på nytt
       if (onUploadComplete) {
         onUploadComplete();
       }
@@ -158,12 +175,12 @@ export default function InvoiceUpload({
         setProgress("");
         setUploading(false);
       }, 1500);
-    } catch (err: any) {
-      console.error("Fatal error in processInvoice:", err);
-      setError(`Error: ${err.message || String(err)}`);
+    } catch (e: any) {
+      console.error("Fatal error in processInvoice:", e);
+      setError(e?.message ?? "Unexpected error while processing invoice");
       setUploading(false);
     }
-  }, [file, onUploadComplete]);
+  }, [file, onUploadComplete, runOcrOnFile]);
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6">
@@ -214,7 +231,7 @@ export default function InvoiceUpload({
             hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed
             transition-colors"
         >
-          {uploading ? "Processing..." : "Upload & Scan Invoice"}
+          {uploading ? "Processing…" : "Upload & Scan Invoice"}
         </button>
       </div>
 
@@ -224,9 +241,12 @@ export default function InvoiceUpload({
         </h3>
         <ul className="text-xs text-slate-600 space-y-1">
           <li>Vendor / supplier name</li>
-          <li>Invoice date (and later invoice number)</li>
-          <li>Total amount</li>
-          <li>Automatic CO₂ calculation based on energy/fuel usage</li>
+          <li>Invoice date & invoice number (where found)</li>
+          <li>Total amount and currency</li>
+          <li>
+            Automatic CO₂ calculation based on detected energy / fuel / gas
+            usage
+          </li>
         </ul>
       </div>
     </div>
