@@ -1,3 +1,4 @@
+// src/components/Nav.tsx
 import { Link, useLocation } from "react-router-dom";
 
 export default function Nav() {
@@ -13,14 +14,13 @@ export default function Nav() {
   return (
     <nav className="w-full border-b bg-white">
       <div className="mx-auto max-w-6xl flex items-center justify-between px-4 h-14">
-
         {/* Logo */}
         <Link to="/" className="text-xl font-bold text-green-600">
           BuildCarbon
         </Link>
 
         {/* Menu */}
-        <div className="flex space-x-2">
+        <div className="flex items-center space-x-2">
           <Link to="/invoices" className={linkClass("/invoices")}>
             Fakturaer
           </Link>
@@ -37,7 +37,15 @@ export default function Nav() {
             ESG
           </Link>
 
-          {/* Deactivated items */}
+          {/* CTA: Last opp faktura */}
+          <Link
+            to="/upload"
+            className="ml-4 px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700"
+          >
+            Last opp faktura
+          </Link>
+
+          {/* Deaktiverte menyer */}
           <button
             disabled
             className="px-4 py-2 rounded-lg text-sm opacity-40 cursor-not-allowed"
