@@ -5,20 +5,18 @@ import Home from "./pages/Home";
 import Demo from "./pages/Demo";
 import Benchmark from "./pages/Benchmark";
 import Invoices from "./pages/Invoices";
-import Nav from "./components/Nav";
 import InvoiceDetailPage from "./pages/InvoiceDetail";
 import Measures from "./pages/Measures";
 import DashboardPage from "./pages/Dashboard";
 import ESG from "./pages/ESG";
 import UploadInvoicePage from "./pages/UploadInvoice";
 import DocumentsPage from "./pages/Documents";
+import AppShell from "./components/AppShell";
 
 export default function App() {
   return (
     <BrowserRouter>
-      <div>
-        <Nav />
-
+      <AppShell>
         <Routes>
           <Route path="/" element={<Home />} />
 
@@ -35,7 +33,7 @@ export default function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/esg" element={<ESG />} />
         </Routes>
-      </div>
+      </AppShell>
     </BrowserRouter>
   );
 }
