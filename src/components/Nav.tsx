@@ -1,3 +1,4 @@
+// src/components/Nav.tsx
 import { Link, useLocation } from "react-router-dom";
 
 export default function Nav() {
@@ -14,13 +15,17 @@ export default function Nav() {
         BuildCarbon
       </Link>
 
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-6 text-sm">
         <Link className={linkClass("/invoices")} to="/invoices">
           Fakturaer
         </Link>
 
         <Link className={linkClass("/upload")} to="/upload">
           Last opp
+        </Link>
+
+        <Link className={linkClass("/documents")} to="/documents">
+          Dokumenter
         </Link>
 
         <Link className={linkClass("/measures")} to="/measures">
