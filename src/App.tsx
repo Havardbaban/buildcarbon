@@ -10,6 +10,7 @@ import InvoiceDetailPage from "./pages/InvoiceDetail";
 import Measures from "./pages/Measures";
 import DashboardPage from "./pages/Dashboard";
 import ESG from "./pages/ESG";
+import UploadInvoicePage from "./pages/UploadInvoice";
 
 export default function App() {
   return (
@@ -19,11 +20,15 @@ export default function App() {
 
         <Routes>
           <Route path="/" element={<Home />} />
+
+          {/* Deaktivert i MVP */}
           <Route path="/demo" element={<Demo disabled={true} />} />
           <Route path="/benchmark" element={<Benchmark disabled={true} />} />
 
+          {/* Aktive sider */}
           <Route path="/invoices" element={<Invoices />} />
           <Route path="/invoice/:id" element={<InvoiceDetailPage />} />
+          <Route path="/upload" element={<UploadInvoicePage />} />
           <Route path="/measures" element={<Measures />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/esg" element={<ESG />} />
@@ -32,3 +37,4 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
