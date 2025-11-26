@@ -177,6 +177,7 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
 
   function parseFirstMoneyIn(line: string): number | null {
     let m: RegExpExecArray | null;
+    MONEY.lastIndex = 0;
     while ((m = MONEY.exec(line))) {
       const val = parseMoney(m[1]);
       if (val == null) continue;
@@ -189,7 +190,7 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
   let best: number | null = null;
   let fromStrong = false;
 
-  // 1) Strong Heimstaden-style "Beløp å betale  9.969,00"
+  // 1) Heimstaden-style "Beløp å betale  9.969,00"
   for (let i = 0; i < lines.length - 1; i++) {
     const current = lines[i];
     const lower = current.toLowerCase();
@@ -206,18 +207,18 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     }
   }
 
-  // 2) Table-style header line like "Beskrivelse  Periode  Beløp  MVA  Total"
+  // 2) Tabell-header "Beskrivelse  Periode  Beløp  MVA  Total"
   if (best == null) {
     for (let i = 0; i < lines.length - 1; i++) {
       const current = lines[i];
       const lower = current.toLowerCase();
 
-      // skip obvious header
       if (
         /beskrivelse/.test(lower) &&
         /beløp|belop/.test(lower) &&
         /mva/.test(lower)
       ) {
+        // header, hopp over
         continue;
       }
 
@@ -232,7 +233,7 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
     }
   }
 
-  // 3) General fallback: pick strong "total" lines or highest amount
+  // 3) Generell fallback: sterke "total"-linjer eller største beløp så langt
   if (best == null) {
     for (const l of lines) {
       if (BAD_LINE.test(l)) continue;
@@ -249,6 +250,22 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
         if (best == null || val > best) best = val;
       }
     }
+  }
+
+  // 4) Siste utvei: ta det største beløpet i hele dokumentet
+  if (best == null) {
+    let maxVal: number | null = null;
+    for (const l of lines) {
+      if (BAD_LINE.test(l)) continue;
+      MONEY.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = MONEY.exec(l))) {
+        const val = parseMoney(m[1]);
+        if (val == null || val > 1_000_000_000) continue;
+        if (maxVal == null || val > maxVal) maxVal = val;
+      }
+    }
+    if (maxVal != null) best = maxVal;
   }
 
   if (best != null) out.total = best;
