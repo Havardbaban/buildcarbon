@@ -2,6 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root {
-  height: 100%;
+@layer base {
+  * {
+    @apply box-border;
+  }
+
+  body {
+    @apply m-0 bg-slate-50 text-slate-900 antialiased;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      "Segoe UI", sans-serif;
+  }
+}
+
+@layer components {
+  .bc-shell {
+    @apply mx-auto max-w-6xl px-4 pt-4 pb-10;
+  }
+
+  .bc-section {
+    @apply space-y-4;
+  }
+
+  .bc-card {
+    @apply rounded-2xl bg-white shadow-sm border border-slate-200 p-5;
+  }
+
+  .bc-stat-card {
+    @apply bc-card flex flex-col gap-1;
+  }
+
+  .bc-stat-label {
+    @apply text-xs font-medium uppercase tracking-wide text-slate-500;
+  }
+
+  .bc-stat-value {
+    @apply text-2xl font-semibold text-slate-900;
+  }
+
+  .bc-badge {
+    @apply inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5
+      text-xs font-medium text-emerald-700 border border-emerald-100;
+  }
 }
