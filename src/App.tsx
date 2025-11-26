@@ -17,8 +17,18 @@ export default function App() {
 
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/demo" element={<Demo />} />
-        <Route path="/benchmark" element={<Benchmark />} />
+
+        {/* 🔒 Deaktivert | "Coming soon" */}
+        <Route
+          path="/demo"
+          element={<Demo disabled={true} />}
+        />
+        <Route
+          path="/benchmark"
+          element={<Benchmark disabled={true} />}
+        />
+
+        {/* Aktive sider */}
         <Route path="/invoices" element={<Invoices />} />
         <Route path="/invoice/:id" element={<InvoiceDetailPage />} />
         <Route path="/measures" element={<Measures />} />
