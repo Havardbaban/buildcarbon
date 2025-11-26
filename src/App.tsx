@@ -9,6 +9,7 @@ import Nav from "./components/Nav";
 import InvoiceDetailPage from "./pages/InvoiceDetail";
 import Measures from "./pages/Measures";
 import DashboardPage from "./pages/Dashboard";
+import ESG from "./pages/ESG";
 
 export default function App() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/invoice/:id" element={<InvoiceDetailPage />} />
         <Route path="/measures" element={<Measures />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/esg" element={<ESG />} />
       </Routes>
     </BrowserRouter>
   );
