@@ -1,41 +1,58 @@
-// src/App.tsx
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+// src/components/Nav.tsx
+import { Link, useLocation } from "react-router-dom";
 
-import Home from "./pages/Home";
-import Demo from "./pages/Demo";
-import Benchmark from "./pages/Benchmark";
-import Invoices from "./pages/Invoices";
-import Nav from "./components/Nav";
-import InvoiceDetailPage from "./pages/InvoiceDetail";
-import Measures from "./pages/Measures";
-import DashboardPage from "./pages/Dashboard";
-import ESG from "./pages/ESG";
+export default function Nav() {
+  const { pathname } = useLocation();
 
-export default function App() {
+  const linkClass = (path: string) =>
+    `px-4 py-2 rounded-lg text-sm font-medium ${
+      pathname === path
+        ? "bg-green-600 text-white"
+        : "text-slate-700 hover:bg-slate-200"
+    }`;
+
   return (
-    <BrowserRouter>
-      <Nav />
+    <nav className="w-full border-b bg-white">
+      <div className="mx-auto max-w-6xl flex items-center justify-between px-4 h-14">
+        {/* Logo */}
+        <Link to="/" className="text-xl font-bold text-green-600">
+          BuildCarbon
+        </Link>
 
-      <Routes>
-        <Route path="/" element={<Home />} />
+        {/* Menu */}
+        <div className="flex space-x-2">
+          <Link to="/invoices" className={linkClass("/invoices")}>
+            Fakturaer
+          </Link>
 
-        {/* 🔒 Deaktivert | "Coming soon" */}
-        <Route
-          path="/demo"
-          element={<Demo disabled={true} />}
-        />
-        <Route
-          path="/benchmark"
-          element={<Benchmark disabled={true} />}
-        />
+          <Link to="/measures" className={linkClass("/measures")}>
+            Tiltak
+          </Link>
 
-        {/* Aktive sider */}
-        <Route path="/invoices" element={<Invoices />} />
-        <Route path="/invoice/:id" element={<InvoiceDetailPage />} />
-        <Route path="/measures" element={<Measures />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/esg" element={<ESG />} />
-      </Routes>
-    </BrowserRouter>
+          <Link to="/dashboard" className={linkClass("/dashboard")}>
+            Dashboard
+          </Link>
+
+          <Link to="/esg" className={linkClass("/esg")}>
+            ESG
+          </Link>
+
+          {/* Disabled links */}
+          <button
+            disabled
+            className="px-4 py-2 rounded-lg text-sm opacity-40 cursor-not-allowed"
+          >
+            Demo
+          </button>
+
+          <button
+            disabled
+            className="px-4 py-2 rounded-lg text-sm opacity-40 cursor-not-allowed"
+          >
+            Benchmark
+          </button>
+        </div>
+      </div>
+    </nav>
   );
 }
