@@ -1,110 +1,12 @@
+// src/components/InvoiceUpload.tsx
+
 import React, { useState, useCallback } from "react";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 import { v4 as uuidv4 } from "uuid";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
-import { parseInvoiceLines } from "../lib/parseInvoiceLines";
-
-type InvoiceData = {
-  vendor: string | null;
-  invoiceNo: string | null;
-  invoiceDate: string | null;
-  total: number | null;
-  currency: string;
-  totalCo2Kg: number | null;
-};
-
-const CO2_EMISSION_FACTORS: { [key: string]: number } = {
-  electricity: 0.028,
-  diesel: 2.68,
-  petrol: 2.31,
-  gas: 2.0,
-};
-
-function extractInvoiceData(text: string): InvoiceData {
-  const lines = text.split("\n");
-  const lowerText = text.toLowerCase();
-
-  let vendor: string | null = null;
-  let invoiceNo: string | null = null;
-  let invoiceDate: string | null = null;
-  let total: number | null = null;
-  let currency = "NOK";
-  let totalCo2Kg: number | null = null;
-
-  // Finn leverandørnavn (første "fornuftige" linje)
-  for (let i = 0; i < Math.min(10, lines.length); i++) {
-    const line = lines[i].trim();
-    if (line.length > 5 && /[A-Z]/.test(line) && !vendor) {
-      vendor = line;
-      break;
-    }
-  }
-
-  // Fakturanummer
-  const invoiceMatch = text.match(
-    /(?:invoice|faktura)\s*(?:no|nr)?[:\s]*([A-Z0-9\-]+)/i
-  );
-  if (invoiceMatch) invoiceNo = invoiceMatch[1];
-
-  // Dato
-  const dateMatch = text.match(/(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})/);
-  if (dateMatch) {
-    const [, day, month, year] = dateMatch;
-    const fullYear = year.length === 2 ? `20${year}` : year;
-    invoiceDate = `${fullYear}-${month.padStart(2, "0")}-${day.padStart(
-      2,
-      "0"
-    )}`;
-  }
-
-  // Totalbeløp
-  const amountMatches = text.match(
-    /(?:total|sum|beløp)[:\s]*(?:NOK|kr)?\s*([\d\s,.]+)/gi
-  );
-  if (amountMatches) {
-    for (const match of amountMatches) {
-      const numStr = match.replace(/[^\d,.]/g, "");
-      const num = parseFloat(numStr.replace(/\s/g, "").replace(",", "."));
-      if (!isNaN(num) && num > 0) {
-        if (!total || num > total) total = num;
-      }
-    }
-  }
-
-  // Enkel CO2-utregning basert på tekst
-  if (
-    lowerText.includes("kwh") ||
-    lowerText.includes("electricity") ||
-    lowerText.includes("strøm")
-  ) {
-    const kwhMatch = text.match(/([\d\s,.]+)\s*kwh/i);
-    if (kwhMatch) {
-      const kwh = parseFloat(kwhMatch[1].replace(/\s/g, "").replace(",", "."));
-      if (!isNaN(kwh)) {
-        totalCo2Kg = kwh * CO2_EMISSION_FACTORS.electricity;
-      }
-    }
-  } else if (lowerText.includes("diesel")) {
-    const literMatch = text.match(/([\d\s,.]+)\s*(?:liter|l)\b/i);
-    if (literMatch) {
-      const liters = parseFloat(
-        literMatch[1].replace(/\s/g, "").replace(",", ".")
-      );
-      totalCo2Kg = liters * CO2_EMISSION_FACTORS.diesel;
-    }
-  } else if (lowerText.includes("petrol") || lowerText.includes("bensin")) {
-    const literMatch = text.match(/([\d\s,.]+)\s*(?:liter|l)\b/i);
-    if (literMatch) {
-      const liters = parseFloat(
-        literMatch[1].replace(/\s/g, "").replace(",", ".")
-      );
-      totalCo2Kg = liters * CO2_EMISSION_FACTORS.petrol;
-    }
-  }
-
-  return { vendor, invoiceNo, invoiceDate, total, currency, totalCo2Kg };
-}
+import parseInvoice from "../lib/invoiceParser";
+import saveDocumentLinesWithCo2 from "../lib/saveDocumentLinesWithCo2";
 
 export default function InvoiceUpload({
   onUploadComplete,
@@ -139,7 +41,7 @@ export default function InvoiceUpload({
       const fileExt = file.name.split(".").pop();
       const storagePath = `invoices/${fileId}.${fileExt}`;
 
-      // LAGRE FIL I SUPABASE STORAGE (bucket: invoices)
+      // 1) LAGRE FIL I SUPABASE STORAGE (bucket: invoices)
       const { error: uploadError } = await supabase.storage
         .from("invoices")
         .upload(storagePath, file);
@@ -164,11 +66,11 @@ export default function InvoiceUpload({
         .from("invoices")
         .getPublicUrl(storagePath);
 
+      // 2) OCR – hent tekst fra PDF/bilde
       setProgress("Processing file with OCR...");
 
       let ocrText = "";
 
-      // OCR – PDF
       if (file.type === "application/pdf") {
         const pages = await pdfToPngBlobs(file);
         for (let i = 0; i < pages.length; i++) {
@@ -184,9 +86,7 @@ export default function InvoiceUpload({
           });
           ocrText += result.data.text + "\n";
         }
-      }
-      // OCR – Bilde
-      else if (file.type.startsWith("image/")) {
+      } else if (file.type.startsWith("image/")) {
         const result = await Tesseract.recognize(file, "eng", {
           logger: (m) => {
             if (m.status === "recognizing text") {
@@ -201,73 +101,60 @@ export default function InvoiceUpload({
         return;
       }
 
-      // Ekstraher strukturert data
+      // 3) Parse faktura-tekst til strukturert data
       setProgress("Extracting invoice data...");
-      const invoiceData = extractInvoiceData(ocrText);
+      const parsed = await parseInvoice(ocrText);
 
-      // LAGRE I invoices-tabellen med dine kolonnenavn
+      // 4) Lagre én rad i `document`
       setProgress("Saving to database...");
 
-      const { data: invoiceRow, error: dbError } = await supabase
-        .from("invoices")
-        .insert({
-          // disse feltene matcher tabellen du har i Supabase
-          filename: file.name,
-          storage_path: storagePath,
-          public_url: urlData.publicUrl,
-          status: "parsed", // type: invoice_status
-          ocr_text: ocrText,
-          supplier: invoiceData.vendor, // tidligere "vendor"
-          invoice_date: invoiceData.invoiceDate,
-          total_amount: invoiceData.total,
-          co2_kg: invoiceData.totalCo2Kg,
-          // invoice_no og currency kan du legge til her
-          // hvis de finnes som kolonner i schemaet ditt
-        })
+      const { data: docRow, error: docError } = await supabase
+        .from("document")
+        .insert([
+          {
+            // org_id kan være null i MVP
+            org_id: null,
+            external_id: fileId,
+            supplier_name: parsed.vendor ?? null,
+            issue_date: parsed.dateISO ?? null,
+            total_amount: parsed.total ?? null,
+            currency: parsed.currency ?? "NOK",
+            co2_kg: parsed.co2Kg ?? null,
+            energy_kwh: parsed.energyKwh ?? null,
+            fuel_liters: parsed.fuelLiters ?? null,
+            gas_m3: parsed.gasM3 ?? null,
+            file_path: storagePath,
+            public_url: urlData.publicUrl,
+            ocr_text: ocrText,
+          },
+        ])
         .select("id")
         .single();
 
-      if (dbError) {
-        console.error("DB error on invoices:", dbError);
-        setError(`Database error: ${dbError.message}`);
+      if (docError) {
+        console.error("DB error on document:", docError);
+        setError(`Database error: ${docError.message}`);
         setUploading(false);
         return;
       }
 
-      const invoiceId = invoiceRow?.id;
+      const documentId = docRow?.id as string | undefined;
 
-      // LAGRE LINJEARTIKLER I invoice_lines
-      if (invoiceId) {
-        setProgress("Parsing line items with ESG classification...");
-
-        const lineItems = parseInvoiceLines(ocrText);
-
-        if (lineItems.length > 0) {
-          const linesToInsert = lineItems.map((line) => ({
-            invoice_id: invoiceId,
-            line_number: line.lineNumber,
-            description: line.description,
-            quantity: line.quantity,
-            unit_price: line.unitPrice,
-            amount: line.amount,
-            category: line.category,
-            esg_scope: line.esgScope,
-            co2_kg: line.co2Kg,
-          }));
-
-          const { error: linesError } = await supabase
-            .from("invoice_lines")
-            .insert(linesToInsert);
-
-          if (linesError) {
-            console.error("Failed to insert line items:", linesError);
-          }
+      // 5) Lagre linjeartikler i `document_line` med CO₂, hvis vi har noen
+      if (documentId && parsed.lines && parsed.lines.length > 0) {
+        try {
+          await saveDocumentLinesWithCo2(supabase, documentId, parsed.lines);
+        } catch (lineErr) {
+          console.error("Failed to insert document_line rows:", lineErr);
+          // vi stopper ikke hele prosessen, men logger feilen
         }
       }
 
+      // 6) Ferdig!
       setProgress("Invoice processed successfully!");
       setFile(null);
 
+      // si ifra til parent (InvoicesPage) at vi er ferdige – den laster listen på nytt
       if (onUploadComplete) onUploadComplete();
 
       setTimeout(() => {
@@ -276,7 +163,7 @@ export default function InvoiceUpload({
       }, 1500);
     } catch (err: any) {
       console.error("Fatal error in processInvoice:", err);
-      setError(`Error: ${err.message}`);
+      setError(`Error: ${err.message || String(err)}`);
       setUploading(false);
     }
   }, [file, onUploadComplete]);
@@ -342,7 +229,7 @@ export default function InvoiceUpload({
           <li>Vendor / supplier name</li>
           <li>Invoice date (and later invoice number)</li>
           <li>Total amount</li>
-          <li>Automatic CO2 calculation based on energy/fuel usage</li>
+          <li>Automatic CO₂ calculation based on energy/fuel usage</li>
         </ul>
       </div>
     </div>
