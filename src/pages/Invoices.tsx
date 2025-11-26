@@ -1,6 +1,8 @@
 // src/pages/Invoices.tsx
+
 import React, { useEffect, useState } from "react";
 import supabase from "../lib/supabase";
+import InvoiceUpload from "../components/InvoiceUpload";
 
 type DocumentRow = {
   id: string;
@@ -23,7 +25,7 @@ function formatDate(value: string | null) {
   return new Date(value).toLocaleDateString("nb-NO");
 }
 
-export default function Invoices() {
+export default function InvoicesPage() {
   const [rows, setRows] = useState<DocumentRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,14 +37,14 @@ export default function Invoices() {
 
       const { data, error } = await supabase
         .from("document")
-        .select<"*", DocumentRow>("id, issue_date, total_amount, currency, co2_kg")
+        .select("id, issue_date, total_amount, currency, co2_kg")
         .order("issue_date", { ascending: false });
 
       if (error) {
         console.error("Error loading documents", error);
         setError(error.message);
       } else {
-        setRows(data || []);
+        setRows((data as DocumentRow[]) || []);
       }
 
       setLoading(false);
@@ -52,48 +54,59 @@ export default function Invoices() {
   }, []);
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-10">
-      <h1 className="text-2xl font-semibold mb-6">Invoices</h1>
+    <div className="max-w-6xl mx-auto px-4 py-10 space-y-10">
+      {/* Øverst: Invoice Scanner / upload-komponenten din */}
+      <InvoiceUpload />
 
-      {loading && <p>Loading invoices…</p>}
-      {error && <p className="text-red-600">Error: {error}</p>}
+      {/* Under: liste over fakturaer fra `document` */}
+      <section>
+        <h2 className="text-xl font-semibold mb-4">Invoices</h2>
 
-      <div className="border rounded-lg overflow-hidden">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-2 text-left">Invoice ID</th>
-              <th className="px-4 py-2 text-left">Date</th>
-              <th className="px-4 py-2 text-right">Amount</th>
-              <th className="px-4 py-2 text-right">CO₂ (kg)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && !loading && (
+        {loading && <p>Loading invoices…</p>}
+        {error && <p className="text-red-600">Error: {error}</p>}
+
+        <div className="border rounded-lg overflow-hidden">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50">
               <tr>
-                <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                  No invoices found. Upload one on the Invoice Scanner page.
-                </td>
+                <th className="px-4 py-2 text-left">Invoice ID</th>
+                <th className="px-4 py-2 text-left">Date</th>
+                <th className="px-4 py-2 text-right">Amount</th>
+                <th className="px-4 py-2 text-right">CO₂ (kg)</th>
               </tr>
-            )}
+            </thead>
+            <tbody>
+              {rows.length === 0 && !loading && (
+                <tr>
+                  <td
+                    colSpan={4}
+                    className="px-4 py-6 text-center text-gray-500"
+                  >
+                    No invoices found. Upload one above to get started.
+                  </td>
+                </tr>
+              )}
 
-            {rows.map((row) => (
-              <tr key={row.id} className="border-t">
-                <td className="px-4 py-2">{row.id}</td>
-                <td className="px-4 py-2">{formatDate(row.issue_date)}</td>
-                <td className="px-4 py-2 text-right">
-                  {row.total_amount !== null
-                    ? `${formatNumber(row.total_amount)} ${row.currency || "NOK"}`
-                    : "-"}
-                </td>
-                <td className="px-4 py-2 text-right">
-                  {row.co_kg !== null ? formatNumber(row.co_kg) : "-"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+              {rows.map((row) => (
+                <tr key={row.id} className="border-t">
+                  <td className="px-4 py-2">{row.id}</td>
+                  <td className="px-4 py-2">{formatDate(row.issue_date)}</td>
+                  <td className="px-4 py-2 text-right">
+                    {row.total_amount !== null
+                      ? `${formatNumber(row.total_amount)} ${
+                          row.currency || "NOK"
+                        }`
+                      : "-"}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {row.co2_kg !== null ? formatNumber(row.co2_kg) : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
