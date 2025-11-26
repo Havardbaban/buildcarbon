@@ -14,7 +14,15 @@ type DocumentRow = {
 };
 
 function formatNumber(value: number | null | undefined) {
-  if (value === null || value === undefined) return "–";
+  if (value === null || value === undefined || Number.isNaN(value)) return "–";
+  return value.toLocaleString("nb-NO", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+}
+
+function formatMoney(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "–";
   return value.toLocaleString("nb-NO", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -23,7 +31,6 @@ function formatNumber(value: number | null | undefined) {
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "–";
-  // value er ISO: yyyy-mm-dd
   try {
     const d = new Date(value);
     return d.toLocaleDateString("nb-NO");
@@ -33,53 +40,53 @@ function formatDate(value: string | null | undefined) {
 }
 
 export default function InvoicesPage() {
-  const [rows, setRows] = useState<DocumentRow[]>([]);
+  const [invoices, setInvoices] = useState<DocumentRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadDocuments = useCallback(async () => {
+  const loadInvoices = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     const { data, error } = await supabase
       .from("document")
-      .select(
-        "id, supplier_name, issue_date, total_amount, currency, co2_kg"
-      )
-      .order("created_at", { ascending: false });
+      .select("id, supplier_name, issue_date, total_amount, currency, co2_kg")
+      .order("issue_date", { ascending: false });
 
     if (error) {
-      console.error("Error loading documents:", error);
+      console.error("Error loading invoices:", error);
       setError(error.message);
-      setRows([]);
-    } else {
-      setRows((data ?? []) as DocumentRow[]);
+      setInvoices([]);
+      setLoading(false);
+      return;
     }
 
+    setInvoices((data ?? []) as DocumentRow[]);
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    loadDocuments();
-  }, [loadDocuments]);
+    loadInvoices();
+  }, [loadInvoices]);
 
   return (
-    <div className="max-w-5xl mx-auto py-10 space-y-8">
-      {/* Øverst: upload-boksen */}
-      <InvoiceUpload onUploadComplete={loadDocuments} />
+    <div className="max-w-6xl mx-auto py-10 space-y-8">
+      {/* Upload card */}
+      <InvoiceUpload onUploadComplete={loadInvoices} />
 
-      {/* Under: tabell med dokumenter */}
+      {/* Error from listing */}
+      {error && (
+        <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {/* Invoice table */}
       <section>
         <h2 className="text-xl font-semibold mb-4">Invoices</h2>
 
-        {error && (
-          <div className="mb-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-
         {loading && (
-          <div className="mb-4 text-sm text-slate-500">Loading invoices…</div>
+          <div className="text-sm text-slate-500 mb-3">Loading invoices…</div>
         )}
 
         <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
@@ -104,7 +111,7 @@ export default function InvoicesPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 && !loading && (
+              {invoices.length === 0 && !loading && (
                 <tr>
                   <td
                     colSpan={5}
@@ -115,20 +122,18 @@ export default function InvoicesPage() {
                 </tr>
               )}
 
-              {rows.map((row) => (
+              {invoices.map((row) => (
                 <tr key={row.id} className="border-t border-slate-100">
-                  <td className="px-4 py-3 text-slate-800 font-mono text-xs">
-                    {row.id}
-                  </td>
-                  <td className="px-4 py-3 text-slate-700">
-                    {row.supplier_name || "—"}
+                  <td className="px-4 py-3 text-slate-800">{row.id}</td>
+                  <td className="px-4 py-3 text-slate-800">
+                    {row.supplier_name || "Unknown"}
                   </td>
                   <td className="px-4 py-3 text-slate-700">
                     {formatDate(row.issue_date)}
                   </td>
                   <td className="px-4 py-3 text-right text-slate-800">
                     {row.total_amount !== null
-                      ? `${formatNumber(row.total_amount)} ${
+                      ? `${formatMoney(row.total_amount)} ${
                           row.currency || "NOK"
                         }`
                       : "–"}
