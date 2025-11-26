@@ -11,6 +11,7 @@ import Measures from "./pages/Measures";
 import DashboardPage from "./pages/Dashboard";
 import ESG from "./pages/ESG";
 import UploadInvoicePage from "./pages/UploadInvoice";
+import DocumentsPage from "./pages/Documents";
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/invoices" element={<Invoices />} />
           <Route path="/invoice/:id" element={<InvoiceDetailPage />} />
           <Route path="/upload" element={<UploadInvoicePage />} />
+          <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/measures" element={<Measures />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/esg" element={<ESG />} />
@@ -37,4 +39,3 @@ export default function App() {
     </BrowserRouter>
   );
 }
-
