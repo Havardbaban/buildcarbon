@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabase";
 
 type DocumentRow = {
   id: string;
-  supplier: string | null;
+  supplier_name: string | null;
   issue_date: string | null;
   total_amount: number | null;
   currency: string | null;
@@ -60,7 +60,9 @@ export default function MeasuresPage() {
 
       const { data, error } = await supabase
         .from("document")
-        .select("id, supplier, issue_date, total_amount, currency, co2_kg")
+        .select(
+          "id, supplier_name, issue_date, total_amount, currency, co2_kg"
+        )
         .order("issue_date", { ascending: false });
 
       if (error) {
@@ -73,7 +75,6 @@ export default function MeasuresPage() {
       const docs = (data || []) as DocumentRow[];
       setDocuments(docs);
 
-      // Simple heuristic measures for MVP
       const generated: MeasureRow[] = [];
 
       for (const doc of docs) {
@@ -82,7 +83,7 @@ export default function MeasuresPage() {
 
         if (spend <= 0 && co2 <= 0) continue;
 
-        const supplier = (doc.supplier || "Unknown").toLowerCase();
+        const supplier = (doc.supplier_name || "Unknown").toLowerCase();
         let category = "Operations";
         let title = "Operational optimization pack";
 
@@ -99,15 +100,12 @@ export default function MeasuresPage() {
           title = "Fuel efficiency program";
         }
 
-        // Demo rules:
-        // - Annual savings: ~3% of spend
-        // - CO2 reduction: 15% of current CO2
-        const annualSavings = spend * 0.03;
-        const annualCo2Reduction = co2 * 0.15;
+        const annualSavings = spend * 0.03; // 3%
+        const annualCo2Reduction = co2 * 0.15; // 15%
 
         if (annualSavings <= 0 && annualCo2Reduction <= 0) continue;
 
-        const capex = spend * 0.1; // invest ~10% of annual spend
+        const capex = spend * 0.1; // invest ~10% av spend
         const paybackYears =
           annualSavings > 0 && capex > 0 ? capex / annualSavings : 0;
 
@@ -119,7 +117,7 @@ export default function MeasuresPage() {
           annualCo2ReductionKg: annualCo2Reduction,
           paybackYears,
           sourceInvoiceId: doc.id,
-          supplier: doc.supplier,
+          supplier: doc.supplier_name,
         });
       }
 
