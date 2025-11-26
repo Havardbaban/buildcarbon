@@ -202,4 +202,49 @@ export default function ESG() {
                 paddingAngle={4}
               >
                 {pieData.map((_, i) => (
-                  <Cell key={
+                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">CO₂ utvikling over tid</h2>
+        <div className="h-72 bg-white rounded-xl shadow p-4">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={lineData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip />
+              <Line
+                type="monotone"
+                dataKey="co2"
+                stroke="#0EA5E9"
+                strokeWidth={3}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-3">Kostnader per leverandør</h2>
+        <div className="h-72 bg-white rounded-xl shadow p-4">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={barData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="cost" fill="#22C55E" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+    </main>
+  );
+}
