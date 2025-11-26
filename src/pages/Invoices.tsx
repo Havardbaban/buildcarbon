@@ -30,35 +30,34 @@ export default function InvoicesPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const loadDocuments = async () => {
+    setLoading(true);
+    setError(null);
+
+    const { data, error } = await supabase
+      .from("document")
+      .select("id, issue_date, total_amount, currency, co2_kg")
+      .order("issue_date", { ascending: false });
+
+    if (error) {
+      console.error("Error loading documents", error);
+      setError(error.message);
+    } else {
+      setRows((data as DocumentRow[]) || []);
+    }
+
+    setLoading(false);
+  };
+
   useEffect(() => {
-    const fetchDocs = async () => {
-      setLoading(true);
-      setError(null);
-
-      const { data, error } = await supabase
-        .from("document")
-        .select("id, issue_date, total_amount, currency, co2_kg")
-        .order("issue_date", { ascending: false });
-
-      if (error) {
-        console.error("Error loading documents", error);
-        setError(error.message);
-      } else {
-        setRows((data as DocumentRow[]) || []);
-      }
-
-      setLoading(false);
-    };
-
-    fetchDocs();
+    loadDocuments();
   }, []);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-10 space-y-10">
-      {/* Øverst: Invoice Scanner / upload-komponenten din */}
-      <InvoiceUpload />
+      {/* Upload-komponenten får en callback som kjører etter vellykket upload */}
+      <InvoiceUpload onUploadComplete={loadDocuments} />
 
-      {/* Under: liste over fakturaer fra `document` */}
       <section>
         <h2 className="text-xl font-semibold mb-4">Invoices</h2>
 
