@@ -1,67 +1,58 @@
-// src/components/Nav.tsx
-
-import { NavLink, Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 export default function Nav() {
-  const base = "text-sm text-slate-600 hover:text-slate-900";
-  const active = "text-sm text-slate-900 font-semibold underline";
+  const { pathname } = useLocation();
+
+  const linkClass = (path: string) =>
+    `px-4 py-2 rounded-lg text-sm font-medium ${
+      pathname === path
+        ? "bg-green-600 text-white"
+        : "text-slate-700 hover:bg-slate-200"
+    }`;
 
   return (
-    <header className="border-b border-slate-200 bg-white">
-      <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
+    <nav className="w-full border-b bg-white">
+      <div className="mx-auto max-w-6xl flex items-center justify-between px-4 h-14">
+
         {/* Logo */}
-        <Link to="/" className="flex items-center gap-2">
-          <div className="h-8 w-8 bg-green-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
-            E
-          </div>
-          <span className="text-lg font-bold">Envesto</span>
+        <Link to="/" className="text-xl font-bold text-green-600">
+          BuildCarbon
         </Link>
 
-        {/* Links */}
-        <nav className="flex gap-4">
-          <NavLink
-            to="/"
-            className={({ isActive }) => (isActive ? active : base)}
-          >
-            Home
-          </NavLink>
+        {/* Menu */}
+        <div className="flex space-x-2">
+          <Link to="/invoices" className={linkClass("/invoices")}>
+            Fakturaer
+          </Link>
 
-          <NavLink
-            to="/demo"
-            className={({ isActive }) => (isActive ? active : base)}
+          <Link to="/measures" className={linkClass("/measures")}>
+            Tiltak
+          </Link>
+
+          <Link to="/dashboard" className={linkClass("/dashboard")}>
+            Dashboard
+          </Link>
+
+          <Link to="/esg" className={linkClass("/esg")}>
+            ESG
+          </Link>
+
+          {/* Deactivated items */}
+          <button
+            disabled
+            className="px-4 py-2 rounded-lg text-sm opacity-40 cursor-not-allowed"
           >
             Demo
-          </NavLink>
+          </button>
 
-          <NavLink
-            to="/benchmark"
-            className={({ isActive }) => (isActive ? active : base)}
+          <button
+            disabled
+            className="px-4 py-2 rounded-lg text-sm opacity-40 cursor-not-allowed"
           >
             Benchmark
-          </NavLink>
-
-          <NavLink
-            to="/invoices"
-            className={({ isActive }) => (isActive ? active : base)}
-          >
-            Invoices
-          </NavLink>
-
-          <NavLink
-            to="/dashboard"
-            className={({ isActive }) => (isActive ? active : base)}
-          >
-            Dashboard
-          </NavLink>
-
-          <NavLink
-            to="/measures"
-            className={({ isActive }) => (isActive ? active : base)}
-          >
-            Measures
-          </NavLink>
-        </nav>
+          </button>
+        </div>
       </div>
-    </header>
+    </nav>
   );
 }
