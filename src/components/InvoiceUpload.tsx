@@ -1,81 +1,67 @@
-// src/components/InvoiceUpload.tsx
-import React, { useState, useCallback } from "react";
-import Tesseract from "tesseract.js";
-import { v4 as uuidv4 } from "uuid";
+import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
+import Tesseract from "tesseract.js";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
-import parseInvoice from "../lib/invoiceParser";
+import { parseInvoiceLines } from "../lib/parseInvoiceLines";
+import { ACTIVE_ORG_ID } from "../lib/org"; // <-- Multi-org støtte
 
-type UploadState = "idle" | "uploading" | "ocr" | "saving" | "done";
-
-export default function InvoiceUpload({
-  onUploadComplete,
-}: {
-  onUploadComplete?: () => void;
-}) {
+export default function InvoiceUpload() {
   const [file, setFile] = useState<File | null>(null);
-  const [state, setState] = useState<UploadState>("idle");
+  const [state, setState] = useState<"idle" | "uploading" | "ocr" | "saving" | "done" | "error">("idle");
   const [progress, setProgress] = useState<string>("");
+
   const [error, setError] = useState<string | null>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0] || null;
-    setFile(selectedFile);
+  // Handle file selection
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0] ?? null;
+    setFile(f);
     setError(null);
-    setProgress("");
-    setState("idle");
-  };
+  }
 
-  const processInvoice = useCallback(async () => {
+  // Main process
+  async function processInvoice() {
     if (!file) {
-      setError("Please select a file.");
+      setError("Please select a PDF or image file.");
       return;
     }
 
+    setState("uploading");
+    setProgress("Uploading file...");
+
     try {
-      setError(null);
-      setState("uploading");
-      setProgress("Uploading file to storage…");
+      // 1. Upload to storage
+      const ext = file.name.split(".").pop()?.toLowerCase() || "pdf";
+      const path = `invoices/${Date.now()}.${ext}`;
 
-      const fileId = uuidv4();
-      const ext = file.name.split(".").pop() || "pdf";
-      const storagePath = `invoices/${fileId}.${ext}`;
-
-      // 1) Last opp til Supabase Storage (bucket: invoices)
       const { error: uploadError } = await supabase.storage
         .from("invoices")
-        .upload(storagePath, file);
+        .upload(path, file);
 
       if (uploadError) {
-        console.error("Storage upload error:", uploadError);
-        setError(`Upload failed: ${uploadError.message}`);
-        setState("idle");
+        setError("Upload failed: " + uploadError.message);
+        setState("error");
         return;
       }
 
-      // 2) OCR med Tesseract
+      // 2. OCR the file
       setState("ocr");
-      setProgress("Running OCR on invoice…");
-      let ocrText = "";
+      setProgress("Processing OCR...");
 
-      if (file.type === "application/pdf") {
-        const pages = await pdfToPngBlobs(file);
-        for (let i = 0; i < pages.length; i++) {
-          setProgress(`Scanning page ${i + 1} of ${pages.length}…`);
-          const result = await Tesseract.recognize(pages[i], "eng", {
+      let text = "";
+      if (ext === "pdf") {
+        const blobs = await pdfToPngBlobs(file);
+        for (let i = 0; i < blobs.length; i++) {
+          const result = await Tesseract.recognize(blobs[i], "eng", {
             logger: (m) => {
               if (m.status === "recognizing text") {
-                setProgress(
-                  `Scanning page ${i + 1}: ${Math.round(
-                    m.progress * 100
-                  )}%`
-                );
+                setProgress(`OCR page ${i + 1}/${blobs.length}: ${Math.round(m.progress * 100)}%`);
               }
             },
           });
-          ocrText += result.data.text + "\n";
+          text += result.data.text + "\n";
         }
-      } else if (file.type.startsWith("image/")) {
+      } else {
         const result = await Tesseract.recognize(file, "eng", {
           logger: (m) => {
             if (m.status === "recognizing text") {
@@ -83,39 +69,33 @@ export default function InvoiceUpload({
             }
           },
         });
-        ocrText = result.data.text;
-      } else {
-        setError("Unsupported file type. Please upload a PDF or image.");
-        setState("idle");
-        return;
+        text = result.data.text;
       }
 
-      // 3) Parse fakturaen
-      setProgress("Extracting invoice data…");
-      const parsed = await parseInvoice(ocrText);
+      // 3. Parse invoice
+      setProgress("Extracting invoice data...");
+      const parsed = await parseInvoiceLines(text);
 
-      // 4) Lagre i document-tabellen
+      // 4. Save to database
       setState("saving");
-      setProgress("Saving invoice to database…");
+      setProgress("Saving invoice to database...");
 
       const { data: doc, error: dbError } = await supabase
         .from("document")
         .insert({
-          // org_id kan være null i dev
-          org_id: null,
+          org_id: ACTIVE_ORG_ID, // <-- Multi-org
 
-          external_id: storagePath,
-          file_path: storagePath,
+          external_id: path,
+          file_path: path,
 
-          // matcher kolonnene i document-tabellen din
-          supplier_name: parsed.vendor ?? "Unknown",
+          supplier_name: parsed.vendor ?? "",
           supplier_orgnr: parsed.orgNumber ?? null,
 
           issue_date: parsed.dateISO ?? null,
           total_amount: parsed.total ?? null,
           currency: parsed.currency ?? "NOK",
 
-          co2_kg: parsed.co2Kg ?? null,
+          co2_kg: parsed.co2 ?? null,
           energy_kwh: parsed.energyKwh ?? null,
           fuel_liters: parsed.fuelLiters ?? null,
           gas_m3: parsed.gasM3 ?? null,
@@ -124,102 +104,48 @@ export default function InvoiceUpload({
         .single();
 
       if (dbError) {
-        console.error("DB insert error:", dbError);
-        setError(`Database error: ${dbError.message}`);
-        setState("idle");
+        setError("Database error: " + dbError.message);
+        setState("error");
         return;
       }
 
-      console.log("Inserted document row:", doc);
+      console.log("Inserted invoice:", doc);
 
       setState("done");
       setProgress("Invoice processed successfully!");
       setFile(null);
-
-      if (onUploadComplete) onUploadComplete?.();
-
-      setTimeout(() => {
-        setProgress("");
-        setState("idle");
-      }, 1500);
-    } catch (e: any) {
-      console.error("Fatal error in processInvoice:", e);
-      setError(e?.message ?? "Unexpected error while processing invoice.");
-      setState("idle");
+    } catch (err: any) {
+      console.error(err);
+      setError("Unexpected error: " + err.message);
+      setState("error");
     }
-  }, [file, onUploadComplete]);
+  }
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6">
-      <h2 className="text-lg font-semibold mb-4">Upload Invoice</h2>
+    <div className="p-6 max-w-xl mx-auto">
+      <h2 className="text-2xl font-bold mb-4">Upload Invoice</h2>
 
-      <div className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
-            Select Invoice (PDF or Image)
-          </label>
-          <input
-            type="file"
-            accept="application/pdf,image/*"
-            onChange={handleFileChange}
-            disabled={state !== "idle"}
-            className="block w-full text-sm text-slate-500
-              file:mr-4 file:py-2 file:px-4
-              file:rounded-xl file:border-0
-              file:text-sm file:font-semibold
-              file:bg-green-50 file:text-green-700
-              hover:file:bg-green-100
-              disabled:opacity-50"
-          />
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded mb-4">
+          {error}
         </div>
+      )}
 
-        {file && (
-          <div className="text-sm text-slate-600">
-            Selected: {file.name} ({(file.size / 1024).toFixed(1)} KB)
-          </div>
-        )}
+      <input type="file" onChange={onFileChange} accept="application/pdf,image/*" />
 
-        {error && (
-          <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        )}
+      <button
+        onClick={processInvoice}
+        className="mt-4 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+      >
+        Process Invoice
+      </button>
 
-        {progress && (
-          <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-700">
-            {progress}
-          </div>
-        )}
-
-        <button
-          onClick={processInvoice}
-          disabled={!file || state !== "idle"}
-          className="w-full rounded-xl px-4 py-3 bg-green-600 text-white font-medium
-            hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed
-            transition-colors"
-        >
-          {state === "idle" && "Upload & Scan Invoice"}
-          {state === "uploading" && "Uploading…"}
-          {state === "ocr" && "Scanning…"}
-          {state === "saving" && "Saving…"}
-          {state === "done" && "Done!"}
-        </button>
-      </div>
-
-      <div className="mt-6 pt-6 border-t border-slate-200">
-        <h3 className="text-sm font-semibold text-slate-700 mb-2">
-          What we extract:
-        </h3>
-        <ul className="text-xs text-slate-600 space-y-1">
-          <li>Vendor / supplier name</li>
-          <li>Invoice date &amp; org number (where found)</li>
-          <li>Total amount and currency</li>
-          <li>
-            Automatic CO₂ calculation based on detected energy / fuel / gas
-            usage
-          </li>
-        </ul>
-      </div>
+      {state !== "idle" && (
+        <div className="mt-4 p-3 bg-gray-100 rounded">
+          <p>Status: {state}</p>
+          <p>{progress}</p>
+        </div>
+      )}
     </div>
   );
 }
