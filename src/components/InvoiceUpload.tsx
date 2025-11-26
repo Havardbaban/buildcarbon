@@ -112,18 +112,12 @@ export default function InvoiceUpload({ onUploadComplete }: Props) {
       // 4) Sett inn rad i document-tabellen
       setProgress("Saving invoice to database…");
 
-      const supplierOrgNumber = parsed.orgNumber
-        ? Number(parsed.orgNumber)
-        : null;
-
       const { data: docRow, error: docError } = await supabase
         .from("document")
         .insert([
           {
             // metadata
             supplier_name: parsed.vendor ?? null,
-            supplier_org_number: supplierOrgNumber,
-            invoice_no: parsed.invoiceNumber ?? null,
 
             // dato og beløp
             issue_date: parsed.dateISO ?? null,
@@ -136,7 +130,8 @@ export default function InvoiceUpload({ onUploadComplete }: Props) {
             fuel_liters: parsed.fuelLiters ?? null,
             gas_m3: parsed.gasM3 ?? null,
 
-            // referanse til fil i storage
+            // referanse til fil i storage (KUN hvis du vet kolonnen finnes)
+            // hvis du får feil på denne, kan du bare fjerne linjen
             file_path: storagePath,
           },
         ])
@@ -241,7 +236,7 @@ export default function InvoiceUpload({ onUploadComplete }: Props) {
         </h3>
         <ul className="text-xs text-slate-600 space-y-1">
           <li>Vendor / supplier name</li>
-          <li>Invoice date & invoice number (where found)</li>
+          <li>Invoice date (and number, when recognised)</li>
           <li>Total amount and currency</li>
           <li>
             Automatic CO₂ calculation based on detected energy / fuel / gas
