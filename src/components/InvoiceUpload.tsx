@@ -1,11 +1,10 @@
 // src/components/InvoiceUpload.tsx
 import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
-import Tesseract from "tesseract.js";
-import { pdfToPngBlobs } from "../lib/pdfToImages";
 import { parseInvoiceLines } from "../lib/parseInvoiceLines";
 import { ACTIVE_ORG_ID } from "../lib/org";
-import { enrichWithActionData } from "../lib/actionEnrichment"; // 👈 NY IMPORT
+import { runExternalOcr } from "../lib/externalOcr";
+import { enrichWithActionData } from "../lib/actionEnrichment";
 
 export default function InvoiceUpload() {
   const [file, setFile] = useState<File | null>(null);
@@ -47,38 +46,11 @@ export default function InvoiceUpload() {
         return;
       }
 
-      // 2) OCR
+      // 2) Ekstern OCR (i stedet for Tesseract)
       setState("ocr");
-      setProgress("Kjører OCR på faktura...");
+      setProgress("Sender faktura til OCR-tjeneste...");
 
-      let ocrText = "";
-
-      if (ext === "pdf") {
-        const blobs = await pdfToPngBlobs(file);
-        for (let i = 0; i < blobs.length; i++) {
-          const result = await Tesseract.recognize(blobs[i], "eng", {
-            logger: (m) => {
-              if (m.status === "recognizing text") {
-                setProgress(
-                  `Side ${i + 1}/${blobs.length}: ${Math.round(
-                    m.progress * 100
-                  )}%`
-                );
-              }
-            },
-          });
-          ocrText += result.data.text + "\n";
-        }
-      } else {
-        const result = await Tesseract.recognize(file, "eng", {
-          logger: (m) => {
-            if (m.status === "recognizing text") {
-              setProgress(`Skanner: ${Math.round(m.progress * 100)}%`);
-            }
-          },
-        });
-        ocrText = result.data.text;
-      }
+      const ocrText = await runExternalOcr(file, (msg) => setProgress(msg));
 
       // 3) Parse faktura
       setProgress("Ekstraherer fakturadata...");
@@ -115,7 +87,7 @@ export default function InvoiceUpload() {
           fuel_liters: parsed.fuelLiters ?? null,
           gas_m3: parsed.gasM3 ?? null,
 
-          // 🔥 Nye felt for tiltak/ROI
+          // Tiltak/ROI-felt
           category: actionFields.category,
           co2_factor: actionFields.co2_factor,
           benchmark_cost: actionFields.benchmark_cost,
