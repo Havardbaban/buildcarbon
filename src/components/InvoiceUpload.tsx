@@ -5,6 +5,7 @@ import Tesseract from "tesseract.js";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
 import { parseInvoiceLines } from "../lib/parseInvoiceLines";
 import { ACTIVE_ORG_ID } from "../lib/org";
+import { enrichWithActionData } from "../lib/actionEnrichment"; // 👈 NY IMPORT
 
 export default function InvoiceUpload() {
   const [file, setFile] = useState<File | null>(null);
@@ -83,6 +84,13 @@ export default function InvoiceUpload() {
       setProgress("Ekstraherer fakturadata...");
       const parsed = await parseInvoiceLines(ocrText);
 
+      // 3.5) Beregn tiltak/ROI basert på leverandør, total og CO₂
+      const actionFields = enrichWithActionData({
+        vendor_name: parsed.vendor ?? "",
+        total_amount: parsed.total ?? null,
+        co2_kg: parsed.co2 ?? null,
+      });
+
       // 4) Lagre i document-tabellen
       setState("saving");
       setProgress("Lagrer faktura i databasen...");
@@ -106,6 +114,13 @@ export default function InvoiceUpload() {
           energy_kwh: parsed.energyKwh ?? null,
           fuel_liters: parsed.fuelLiters ?? null,
           gas_m3: parsed.gasM3 ?? null,
+
+          // 🔥 Nye felt for tiltak/ROI
+          category: actionFields.category,
+          co2_factor: actionFields.co2_factor,
+          benchmark_cost: actionFields.benchmark_cost,
+          potential_savings_nok: actionFields.potential_savings_nok,
+          potential_savings_co2: actionFields.potential_savings_co2,
         })
         .select("*")
         .single();
@@ -146,7 +161,9 @@ export default function InvoiceUpload() {
         <button
           onClick={processInvoice}
           className="px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
-          disabled={!file || state === "uploading" || state === "ocr" || state === "saving"}
+          disabled={
+            !file || state === "uploading" || state === "ocr" || state === "saving"
+          }
         >
           Prosesser faktura
         </button>
