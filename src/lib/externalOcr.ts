@@ -34,12 +34,12 @@ export async function runExternalOcr(
 
   onStatus?.("Sender faktura til OCR-tjeneste...");
 
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("language", "nor,eng"); // norsk + engelsk
-  formData.append("isTable", "true");
-  formData.append("scale", "true");
-  formData.append("OCREngine", "2"); // bedre motor hos OCR.Space
+ const formData = new FormData();
+formData.append("file", file);
+formData.append("language", "auto");  // ✅ la OCR.Space autodetektere språk
+formData.append("isTable", "true");
+formData.append("scale", "true");
+formData.append("OCREngine", "2");    // kreves for 'auto'
 
   const res = await fetch(OCR_SPACE_ENDPOINT, {
     method: "POST",
