@@ -45,23 +45,38 @@ function toISODate(dmy: string | null): string | null {
   )}`;
 }
 
+/**
+ * Robust money parser for Norwegian-style amounts.
+ *
+ * Håndterer bl.a.:
+ *  - "6 674 155,00"
+ *  - "6.674.155,00"
+ *  - "9.969,00"
+ *  - "100,00"
+ *  - "100"
+ *  - "6674.15"
+ *
+ * Fjerner også "NOK", "kr", "kr." hvis det ligger rundt tallet.
+ */
 function parseMoney(n: string): number | null {
-  let s = n.trim();
+  if (!n) return null;
+
+  let s = n.replace(/\u00A0/g, " ").trim(); // NBSP -> space
 
   // remove currency tokens
-  s = s.replace(/\b(NOK|kr|kr\.?)\b/gi, "").trim();
-  s = s.replace(/\s+/g, " ");
+  s = s.replace(/\b(NOK|kr|kr\.?)\b/gi, " ").trim();
 
-  // If comma is decimal (common NO)
-  if (/,/.test(s) && /\d,\d{2}$/.test(s)) {
+  // Hvis den inneholder komma, antar vi at komma er desimaltegn (norsk stil)
+  if (s.includes(",")) {
+    // fjern mellomrom og punktum som tusenskille
     s = s.replace(/[ .]/g, "");
+    // bytt komma til punktum for JS-number
     s = s.replace(",", ".");
-    const v = Number(s);
-    return Number.isFinite(v) ? v : null;
+  } else {
+    // ingen komma: behold evt. punktum som desimal, men fjern mellomrom
+    s = s.replace(/ /g, "");
   }
 
-  // Dot decimal
-  s = s.replace(/,/g, "");
   const v = Number(s);
   return Number.isFinite(v) ? v : null;
 }
