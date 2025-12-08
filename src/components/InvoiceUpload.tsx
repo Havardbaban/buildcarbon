@@ -3,7 +3,6 @@ import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { ACTIVE_ORG_ID } from "../lib/org";
 import { runExternalOcr } from "../lib/externalOcr";
-import { enrichActionData } from "../lib/actionEnrichment";
 import { saveDocumentLinesWithCo2 } from "../lib/saveDocumentLinesWithCo2";
 
 type UploadState = "idle" | "uploading" | "ocr" | "saving" | "done" | "error";
@@ -33,8 +32,7 @@ export default function InvoiceUpload() {
       setState("uploading");
       setProgress("Laster opp fil til lagring...");
 
-      const ext =
-        file.name.split(".").pop()?.toLowerCase() || "pdf";
+      const ext = file.name.split(".").pop()?.toLowerCase() || "pdf";
       const storagePath = `invoices/${Date.now()}.${ext}`;
 
       const { error: uploadError } = await supabase.storage
@@ -47,18 +45,18 @@ export default function InvoiceUpload() {
         return;
       }
 
-      // 2) Kall Mindee Invoice API (ekstern parser)
+      // 2) Kall ekstern invoice-parser (Mindee)
       setState("ocr");
       setProgress("Sender faktura til invoice-parser...");
 
       const parsed = await runExternalOcr(file, (msg) => setProgress(msg));
 
-      // 3) Beregn tiltak/ROI basert på leverandør, total og CO₂ (hvis vi får det)
-      const actionFields = enrichActionData({
-        vendor_name: parsed.vendor ?? "",
-        total_amount: parsed.total ?? null,
-        co2_kg: parsed.co2Kg ?? null,
-      });
+      // 3) Dummy action-fields (til vi kobler på actionEnrichment riktig)
+      const actionFields = {
+        title: null as string | null,
+        category: null as string | null,
+        potentialSavings: null as number | null,
+      };
 
       // 4) Lagre i document-tabellen
       setState("saving");
@@ -79,8 +77,7 @@ export default function InvoiceUpload() {
             co2_kg: parsed.co2Kg ?? null,
             action_title: actionFields.title,
             action_category: actionFields.category,
-            action_potential_savings:
-              actionFields.potentialSavings,
+            action_potential_savings: actionFields.potentialSavings,
           },
         ])
         .select("id")
