@@ -17,7 +17,6 @@ export default function DashboardPage() {
 
   async function loadData() {
     try {
-      setLoading(true);
       setError(null);
 
       const { data, error } = await supabase
@@ -58,10 +57,10 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    // 1) Last data ved første render
+    // 1) Last initialt
     loadData();
 
-    // 2) Realtime: last på nytt når det kommer nye dokument-rader
+    // 2) Realtime: last på nytt ved nye dokumenter
     const channel = supabase
       .channel("documents-dashboard")
       .on(
@@ -78,8 +77,14 @@ export default function DashboardPage() {
       )
       .subscribe();
 
+    // 3) Fallback: poll hvert 15. sekund
+    const interval = setInterval(() => {
+      loadData();
+    }, 15000);
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(interval);
     };
   }, []);
 
