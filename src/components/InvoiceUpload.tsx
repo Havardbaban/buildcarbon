@@ -45,20 +45,13 @@ export default function InvoiceUpload() {
         return;
       }
 
-      // 2) Kall ekstern invoice-parser (Mindee)
+      // 2) Kall ekstern OCR (OCR.Space) og vår egen invoice-parser
       setState("ocr");
-      setProgress("Sender faktura til invoice-parser...");
+      setProgress("Sender faktura til OCR-tjeneste...");
 
       const parsed = await runExternalOcr(file, (msg) => setProgress(msg));
 
-      // 3) Dummy action-fields (til vi kobler på actionEnrichment riktig)
-      const actionFields = {
-        title: null as string | null,
-        category: null as string | null,
-        potentialSavings: null as number | null,
-      };
-
-      // 4) Lagre i document-tabellen
+      // 3) Lagre i document-tabellen
       setState("saving");
       setProgress("Lagrer faktura i databasen...");
 
@@ -75,9 +68,9 @@ export default function InvoiceUpload() {
             total_amount: parsed.total ?? null,
             currency: parsed.currency ?? "NOK",
             co2_kg: parsed.co2Kg ?? null,
-            action_title: actionFields.title,
-            action_category: actionFields.category,
-            action_potential_savings: actionFields.potentialSavings,
+            action_title: null,
+            action_category: null,
+            action_potential_savings: null,
           },
         ])
         .select("id")
@@ -91,7 +84,7 @@ export default function InvoiceUpload() {
 
       const documentId = data?.id as string | undefined;
 
-      // 5) Lagre linjeelementer + CO₂ hvis vi har noen
+      // 4) Lagre linjeelementer + CO₂ hvis vi har noen
       if (documentId && parsed.lines.length > 0) {
         await saveDocumentLinesWithCo2(documentId, parsed.lines);
       }
