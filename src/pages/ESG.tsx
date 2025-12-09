@@ -12,7 +12,7 @@ type ESGData = {
 };
 
 function computeScore(totalPerInvoice: number): string {
-  // VELDIG enkel score-logikk, kan justeres senere:
+  // Enkel score, kan tunes senere
   if (totalPerInvoice < 50) return "A";
   if (totalPerInvoice < 150) return "B";
   if (totalPerInvoice < 300) return "C";
@@ -27,7 +27,6 @@ export default function ESGPage() {
 
   async function loadData() {
     try {
-      setLoading(true);
       setError(null);
 
       const { data, error } = await supabase
@@ -45,7 +44,6 @@ export default function ESGPage() {
         0
       );
 
-      // Foreløpig: alt på scope 3 til vi får kategorier
       const scope1 = 0;
       const scope2 = 0;
       const scope3 = totalCo2;
@@ -60,10 +58,10 @@ export default function ESGPage() {
   }
 
   useEffect(() => {
-    // 1) Last data ved første render
+    // 1) Last initialt
     loadData();
 
-    // 2) Realtime: last på nytt når det kommer nye dokument-rader
+    // 2) Realtime: last på nytt ved nye dokumenter
     const channel = supabase
       .channel("documents-esg")
       .on(
@@ -80,8 +78,14 @@ export default function ESGPage() {
       )
       .subscribe();
 
+    // 3) Fallback: poll hvert 15. sekund
+    const interval = setInterval(() => {
+      loadData();
+    }, 15000);
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(interval);
     };
   }, []);
 
@@ -94,6 +98,9 @@ export default function ESGPage() {
     <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-semibold">ESG – utslipp</h1>
+        <p className="text-sm text-gray-600">
+          Scope 1–3 basert på registrerte fakturaer (foreløpig alt på scope 3).
+        </p>
       </header>
 
       {loading && <div>Laster...</div>}
