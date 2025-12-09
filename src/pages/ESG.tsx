@@ -1,7 +1,6 @@
 // src/pages/ESG.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { ACTIVE_ORG_ID } from "../lib/org";
 
 type ESGData = {
   scope1: number;
@@ -12,7 +11,6 @@ type ESGData = {
 };
 
 function computeScore(totalPerInvoice: number): string {
-  // Enkel score, kan tunes senere
   if (totalPerInvoice < 50) return "A";
   if (totalPerInvoice < 150) return "B";
   if (totalPerInvoice < 300) return "C";
@@ -31,8 +29,7 @@ export default function ESGPage() {
 
       const { data, error } = await supabase
         .from("document")
-        .select("id, co2_kg")
-        .eq("org_id", ACTIVE_ORG_ID);
+        .select("id, co2_kg"); // ingen org-filter
 
       if (error) throw error;
 
@@ -58,10 +55,8 @@ export default function ESGPage() {
   }
 
   useEffect(() => {
-    // 1) Last initialt
     loadData();
 
-    // 2) Realtime: last på nytt ved nye dokumenter
     const channel = supabase
       .channel("documents-esg")
       .on(
@@ -70,7 +65,6 @@ export default function ESGPage() {
           event: "INSERT",
           schema: "public",
           table: "document",
-          filter: `org_id=eq.${ACTIVE_ORG_ID}`,
         },
         () => {
           loadData();
@@ -78,7 +72,6 @@ export default function ESGPage() {
       )
       .subscribe();
 
-    // 3) Fallback: poll hvert 15. sekund
     const interval = setInterval(() => {
       loadData();
     }, 15000);
