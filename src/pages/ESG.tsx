@@ -29,7 +29,7 @@ export default function ESGPage() {
 
       const { data, error } = await supabase
         .from("document")
-        .select("id, co2_kg"); // ingen org-filter
+        .select("id, co2_kg");
 
       if (error) throw error;
 
@@ -89,51 +89,51 @@ export default function ESGPage() {
 
   return (
     <div className="space-y-6">
-      <header>
+      <header className="pb-2 border-b border-slate-200">
         <h1 className="text-2xl font-semibold">ESG – utslipp</h1>
-        <p className="text-sm text-gray-600">
-          Scope 1–3 basert på registrerte fakturaer (foreløpig alt på scope 3).
+        <p className="text-sm text-slate-600">
+          Foreløpig legges alle faktura-baserte utslipp på Scope 3.
         </p>
       </header>
 
-      {loading && <div>Laster...</div>}
-      {error && <div className="text-red-600">{error}</div>}
+      {loading && <div className="text-sm text-slate-500">Laster...</div>}
+      {error && <div className="text-sm text-red-600">{error}</div>}
 
       {data && (
         <>
-          <div className="grid gap-4 md:grid-cols-4">
+          <section className="grid gap-4 md:grid-cols-4">
             <ScopeCard label="Scope 1" value={data.scope1} />
             <ScopeCard label="Scope 2" value={data.scope2} />
             <ScopeCard label="Scope 3" value={data.scope3} />
-            <div className="border rounded-lg p-4 bg-white shadow-sm flex flex-col justify-between">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500">
-                  ESG-score (enkel)
-                </div>
-                <div className="mt-2 text-3xl font-semibold">{score}</div>
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4 flex flex-col justify-between">
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                ESG-score (enkel)
               </div>
-              <div className="mt-2 text-xs text-gray-500">
+              <div className="mt-2 text-3xl font-semibold text-slate-900">
+                {score}
+              </div>
+              <div className="mt-2 text-xs text-slate-500">
                 Basert på gjennomsnittlig CO₂ per faktura. Logikken kan
                 justeres senere.
               </div>
             </div>
-          </div>
+          </section>
 
-          <div className="border rounded-lg p-4 bg-white shadow-sm">
-            <div className="text-xs uppercase tracking-wide text-gray-500">
+          <section className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">
               Total CO₂
             </div>
-            <div className="mt-2 text-xl font-semibold">
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
               {data.totalCo2.toLocaleString("nb-NO", {
                 minimumFractionDigits: 1,
                 maximumFractionDigits: 1,
               })}{" "}
               kg
             </div>
-            <div className="mt-1 text-xs text-gray-500">
+            <div className="mt-1 text-xs text-slate-500">
               Basert på {data.invoiceCount.toLocaleString("nb-NO")} fakturaer.
             </div>
-          </div>
+          </section>
         </>
       )}
     </div>
@@ -147,11 +147,11 @@ type ScopeCardProps = {
 
 function ScopeCard({ label, value }: ScopeCardProps) {
   return (
-    <div className="border rounded-lg p-4 bg-white shadow-sm">
-      <div className="text-xs uppercase tracking-wide text-gray-500">
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
+      <div className="text-xs uppercase tracking-wide text-slate-500">
         {label}
       </div>
-      <div className="mt-2 text-xl font-semibold">
+      <div className="mt-2 text-2xl font-semibold text-slate-900">
         {value.toLocaleString("nb-NO", {
           minimumFractionDigits: 1,
           maximumFractionDigits: 1,
