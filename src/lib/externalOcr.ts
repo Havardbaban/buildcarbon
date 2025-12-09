@@ -1,13 +1,19 @@
 // src/lib/externalOcr.ts
 //
-// Kaller OCR.Space for å få ren tekst fra fakturaen.
-// Brukes fra InvoiceUpload for å sende tekst videre til invoiceParser.
+// Kaller OCR.Space for å hente tekst,
+// og bruker så invoiceParser til å lage et ParsedInvoice-objekt.
+
+import parseInvoice, { ParsedInvoice } from "./invoiceParser";
+
+const OCR_SPACE_ENDPOINT = "https://api.ocr.space/parse/image";
 
 export async function runExternalOcr(
   file: File,
   onStatus?: (msg: string) => void
-): Promise<string> {
-  const apiKey = import.meta.env.VITE_OCR_SPACE_API_KEY as string | undefined;
+): Promise<ParsedInvoice> {
+  const apiKey = import.meta.env.VITE_OCR_SPACE_API_KEY as
+    | string
+    | undefined;
 
   if (!apiKey) {
     throw new Error(
@@ -20,16 +26,14 @@ export async function runExternalOcr(
   const formData = new FormData();
   formData.append("file", file);
 
-  // ❌ INGEN language-parameter lenger – den ga E201-feil
-  // formData.append("language", "nor");
-  // eller "nor+eng" / "27" osv. – alt dette er fjernet.
+  // Ingen language-parameter (ga E201-feil før)
+  // OCR.Space velger språk automatisk.
 
-  // Hjelpeparametere for fakturaer / tabeller
   formData.append("isTable", "true");
   formData.append("scale", "true");
   formData.append("OCREngine", "2");
 
-  const res = await fetch("https://api.ocr.space/parse/image", {
+  const res = await fetch(OCR_SPACE_ENDPOINT, {
     method: "POST",
     headers: {
       apikey: apiKey,
@@ -50,6 +54,7 @@ export async function runExternalOcr(
         : data.ErrorMessage) ||
       data.ErrorDetails ||
       "Ukjent feil";
+
     throw new Error(`OCR-tjeneste-feil: ${msg}`);
   }
 
@@ -58,10 +63,21 @@ export async function runExternalOcr(
     throw new Error("OCR-tjeneste returnerte ingen tekst");
   }
 
-  // Slår sammen tekst fra alle sider
-  const text = parsedResults
-    .map((r: any) => (r && typeof r.ParsedText === "string" ? r.ParsedText : ""))
-    .join("\n\n");
+  // Slå sammen tekst fra alle sider
+  const fullText = parsedResults
+    .map((r: any) =>
+      r && typeof r.ParsedText === "string" ? r.ParsedText : ""
+    )
+    .join("\n\n")
+    .trim();
 
-  return text.trim();
+  // Bruk vår egen parser til å lage strukturert data
+  const parsed: ParsedInvoice = await parseInvoice(fullText);
+
+  // Garanti: lines er alltid en array
+  if (!Array.isArray(parsed.lines)) {
+    parsed.lines = [];
+  }
+
+  return parsed;
 }
