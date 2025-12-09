@@ -19,7 +19,7 @@ export default function Nav() {
         {/* Venstre: logo + beta */}
         <div className="flex items-center gap-3">
           <Link
-            to="/"
+            to="/invoices"
             className="text-lg font-semibold tracking-tight text-emerald-700"
           >
             BuildCarbon
@@ -29,21 +29,22 @@ export default function Nav() {
 
         {/* Midt: hovedmeny */}
         <nav className="hidden items-center gap-2 md:flex">
+          {/* Fakturaer = Last opp + Dokumenter på samme side */}
           <Link className={linkClass("/invoices")} to="/invoices">
             Fakturaer
           </Link>
-          <Link className={linkClass("/upload")} to="/upload">
-            Last opp
-          </Link>
-          <Link className={linkClass("/documents")} to="/documents">
-            Dokumenter
-          </Link>
+
+          {/* Tiltak */}
           <Link className={linkClass("/measures")} to="/measures">
             Tiltak
           </Link>
+
+          {/* Dashboard (finans) */}
           <Link className={linkClass("/dashboard")} to="/dashboard">
             Dashboard
           </Link>
+
+          {/* ESG (scope 1–3 + score) */}
           <Link className={linkClass("/esg")} to="/esg">
             ESG
           </Link>
