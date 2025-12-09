@@ -23,9 +23,10 @@ export default function ESGPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadData() {
+  async function load() {
     try {
       setError(null);
+      setLoading(true);
 
       const { data, error } = await supabase
         .from("document")
@@ -35,12 +36,12 @@ export default function ESGPage() {
 
       const rows = data ?? [];
       const invoiceCount = rows.length;
-
       const totalCo2 = rows.reduce(
         (sum, r: any) => sum + (r.co2_kg ?? 0),
         0
       );
 
+      // foreløpig alt på scope 3
       const scope1 = 0;
       const scope2 = 0;
       const scope3 = totalCo2;
@@ -55,31 +56,10 @@ export default function ESGPage() {
   }
 
   useEffect(() => {
-    loadData();
-
-    const channel = supabase
-      .channel("documents-esg")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "document",
-        },
-        () => {
-          loadData();
-        }
-      )
-      .subscribe();
-
-    const interval = setInterval(() => {
-      loadData();
-    }, 15000);
-
-    return () => {
-      supabase.removeChannel(channel);
-      clearInterval(interval);
-    };
+    load();
+    const handler = () => load();
+    window.addEventListener("invoice:updated", handler);
+    return () => window.removeEventListener("invoice:updated", handler);
   }, []);
 
   const score =
@@ -96,8 +76,8 @@ export default function ESGPage() {
         </p>
       </header>
 
-      {loading && <div className="text-sm text-slate-500">Laster...</div>}
-      {error && <div className="text-sm text-red-600">{error}</div>}
+      {loading && <div className="text-xs text-slate-500">Laster...</div>}
+      {error && <div className="text-xs text-red-600">{error}</div>}
 
       {data && (
         <>
@@ -113,26 +93,28 @@ export default function ESGPage() {
                 {score}
               </div>
               <div className="mt-2 text-xs text-slate-500">
-                Basert på gjennomsnittlig CO₂ per faktura. Logikken kan
-                justeres senere.
+                Basert på gjennomsnittlig CO₂ per faktura. Logikk kan justeres
+                senere.
               </div>
             </div>
           </section>
 
-          <section className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">
-              Total CO₂
-            </div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">
-              {data.totalCo2.toLocaleString("nb-NO", {
-                minimumFractionDigits: 1,
-                maximumFractionDigits: 1,
-              })}{" "}
-              kg
-            </div>
-            <div className="mt-1 text-xs text-slate-500">
-              Basert på {data.invoiceCount.toLocaleString("nb-NO")} fakturaer.
-            </div>
+          <section className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
+            <h2 className="text-sm font-medium mb-2">Utslipp per scope</h2>
+            <table className="min-w-full text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50 text-slate-600">
+                  <th className="px-2 py-1 text-left">Scope</th>
+                  <th className="px-2 py-1 text-right">CO₂ (kg)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <ScopeRow label="Scope 1" value={data.scope1} />
+                <ScopeRow label="Scope 2" value={data.scope2} />
+                <ScopeRow label="Scope 3" value={data.scope3} />
+                <ScopeRow label="Totalt" value={data.totalCo2} bold />
+              </tbody>
+            </table>
           </section>
         </>
       )}
@@ -159,5 +141,30 @@ function ScopeCard({ label, value }: ScopeCardProps) {
         kg
       </div>
     </div>
+  );
+}
+
+type ScopeRowProps = {
+  label: string;
+  value: number;
+  bold?: boolean;
+};
+
+function ScopeRow({ label, value, bold }: ScopeRowProps) {
+  return (
+    <tr className="border-b last:border-0">
+      <td className={`px-2 py-1 ${bold ? "font-semibold" : ""}`}>{label}</td>
+      <td
+        className={`px-2 py-1 text-right ${
+          bold ? "font-semibold text-slate-900" : ""
+        }`}
+      >
+        {value.toLocaleString("nb-NO", {
+          minimumFractionDigits: 1,
+          maximumFractionDigits: 1,
+        })}{" "}
+        kg
+      </td>
+    </tr>
   );
 }
