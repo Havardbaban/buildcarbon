@@ -45,13 +45,13 @@ export default function InvoiceUpload() {
         return;
       }
 
-      // 2) Kall ekstern OCR (OCR.Space) og vår egen invoice-parser
+      // 2) Kall ekstern OCR + vår invoice-parser
       setState("ocr");
       setProgress("Sender faktura til OCR-tjeneste...");
 
       const parsed = await runExternalOcr(file, (msg) => setProgress(msg));
 
-      // 3) Lagre i document-tabellen
+      // 3) Lagre i document-tabellen (uten action_* felt)
       setState("saving");
       setProgress("Lagrer faktura i databasen...");
 
@@ -68,9 +68,6 @@ export default function InvoiceUpload() {
             total_amount: parsed.total ?? null,
             currency: parsed.currency ?? "NOK",
             co2_kg: parsed.co2Kg ?? null,
-            action_title: null,
-            action_category: null,
-            action_potential_savings: null,
           },
         ])
         .select("id")
