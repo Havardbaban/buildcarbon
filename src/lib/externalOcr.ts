@@ -1,137 +1,137 @@
 // src/lib/externalOcr.ts
-// Kaller Mindee Invoice API og mapper til ParsedInvoice.
-
-import type { ParsedInvoice, ParsedInvoiceLine } from "./invoiceParser";
-
-// Mindee Invoice v4 endpoint
-// ref: https://api.mindee.net/v1/products/mindee/invoices/v4/predict
-const MINDEE_INVOICE_ENDPOINT =
-  "https://api.mindee.net/v1/products/mindee/invoices/v4/predict";
-
-type MindeePrediction = any; // for enkelhet, vi plukker bare ut feltene vi trenger
+//
+// Kaller Mindee V2 /v2/inferences/enqueue med custom invoice-modell.
+// Brukes fra InvoiceUpload for å få ren tekst vi kan sende til invoiceParser.
 
 export async function runExternalOcr(
   file: File,
   onStatus?: (msg: string) => void
-): Promise<ParsedInvoice> {
-  const apiKey = import.meta.env.VITE_MINDEE_API_KEY as string | undefined;
+): Promise<string> {
+  const apiKey = import.meta.env.VITE_MINDEE_API_KEY;
+  const modelId = import.meta.env.VITE_MINDEE_MODEL_ID;
 
   if (!apiKey) {
     throw new Error(
-      "Mangler VITE_MINDEE_API_KEY. Legg den inn i .env og i Vercel Environment."
+      "Mangler VITE_MINDEE_API_KEY. Legg den inn i Vercel Environment."
     );
   }
 
-  onStatus?.("Sender faktura til Mindee Invoice API...");
-
-  const formData = new FormData();
-  // Viktig: Mindee forventer felt-navn 'document'
-  formData.append("document", file);
-
-  const res = await fetch(MINDEE_INVOICE_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${apiKey}`,
-      Accept: "application/json",
-    },
-    body: formData,
-  });
-
-  if (!res.ok) {
-    throw new Error(`Mindee svarte med HTTP ${res.status}`);
+  if (!modelId) {
+    throw new Error(
+      "Mangler VITE_MINDEE_MODEL_ID. Legg den inn i Vercel Environment."
+    );
   }
 
-  const json = (await res.json()) as {
-    document?: { inference?: { prediction?: MindeePrediction } };
-  };
+  onStatus?.("Sender faktura til Mindee Invoice API (v2)…");
 
-  const prediction = json.document?.inference?.prediction ?? {};
+  // 1) Enqueue: POST /v2/inferences/enqueue
+  const formData = new FormData();
+  formData.append("document", file);
+  formData.append("modelId", modelId);
+  // ber Mindee også gi full OCR-tekst per side
+  formData.append("rawText", "true");
 
-  // ---- Hent ut felt fra Mindee-responsen ----
-  const supplierName =
-    prediction.supplier_name?.value ??
-    prediction.supplier?.value ??
-    prediction.supplier ??
-    null;
+  const enqueueRes = await fetch(
+    "https://api-v2.mindee.net/v2/inferences/enqueue",
+    {
+      method: "POST",
+      headers: {
+        // V2: KUN API-nøkkelen, ingen 'Token ' foran
+        Authorization: apiKey,
+      },
+      body: formData,
+    }
+  );
 
-  const supplierRegs = prediction.supplier_company_registrations ?? [];
-  const supplierOrg =
-    supplierRegs[0]?.value ??
-    supplierRegs[0]?.company_registration_number ??
-    null;
+  if (!enqueueRes.ok) {
+    const errBody = await enqueueRes.text().catch(() => "(ingen body)");
+    throw new Error(
+      `Mindee enqueue feilet med HTTP ${enqueueRes.status}: ${errBody}`
+    );
+  }
 
-  const invoiceNumber =
-    prediction.invoice_number?.value ??
-    prediction.invoice_number ??
-    null;
+  const enqueueJson: any = await enqueueRes.json();
 
-  const dateISO =
-    prediction.date?.value ??
-    prediction.invoice_date?.value ??
-    prediction.date ??
-    null;
+  const pollingUrl: string | undefined = enqueueJson?.polling_url;
+  let resultUrl: string | undefined = enqueueJson?.result_url;
 
-  const totalRaw =
-    prediction.total_incl?.value ??
-    prediction.total_amount?.value ??
-    prediction.total_incl ??
-    prediction.total_amount ??
-    null;
+  if (!pollingUrl && !resultUrl) {
+    throw new Error(
+      "Mindee-respons mangler både polling_url og result_url."
+    );
+  }
 
-  const currencyRaw =
-    prediction.locale?.currency ??
-    prediction.currency?.value ??
-    prediction.currency ??
-    "NOK";
+  // 2) Poll hvis vi ikke fikk result_url direkte
+  if (!resultUrl && pollingUrl) {
+    onStatus?.("Venter på Mindee-resultat…");
 
-  const lineItems =
-    prediction.line_items ??
-    prediction.items ??
+    for (let i = 0; i < 30; i++) {
+      // anbefalt: minst 1 sekund mellom pollinger
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const pollRes = await fetch(pollingUrl, {
+        headers: { Authorization: apiKey },
+      });
+
+      if (!pollRes.ok) {
+        const body = await pollRes.text().catch(() => "(ingen body)");
+        throw new Error(
+          `Mindee polling feilet med HTTP ${pollRes.status}: ${body}`
+        );
+      }
+
+      const pollJson: any = await pollRes.json();
+      resultUrl = pollJson?.result_url;
+
+      if (resultUrl) break;
+    }
+
+    if (!resultUrl) {
+      throw new Error("Fikk aldri result_url fra Mindee etter polling.");
+    }
+  }
+
+  // 3) Hent selve resultatet
+  const resultRes = await fetch(resultUrl!, {
+    headers: { Authorization: apiKey },
+  });
+
+  if (!resultRes.ok) {
+    const body = await resultRes.text().catch(() => "(ingen body)");
+    throw new Error(
+      `Mindee result feilet med HTTP ${resultRes.status}: ${body}`
+    );
+  }
+
+  const resultJson: any = await resultRes.json();
+
+  // 4) Plukk ut full tekst (raw_text) per side
+  // Struktur kan være litt forskjellig, så vi prøver begge variantene.
+  const pages =
+    resultJson?.result?.document?.inference?.pages ??
+    resultJson?.document?.inference?.pages ??
     [];
 
-  const lines: ParsedInvoiceLine[] = (lineItems as any[]).map((item) => ({
-    description:
-      item.description?.value ??
-      item.description ??
-      "",
-    quantity:
-      item.quantity?.value ??
-      item.quantity ??
-      null,
-    // Mindee har ofte 'unit_price' men ikke eksplisitt enhet,
-    // så vi lar unitRaw være null enn så lenge.
-    unitRaw: item.unit?.value ?? item.unit ?? null,
-    amountNok:
-      item.total_amount?.value ??
-      item.total_amount ??
-      null,
-  }));
+  const textChunks: string[] = [];
 
-  const total =
-    typeof totalRaw === "number"
-      ? totalRaw
-      : totalRaw != null
-      ? Number(totalRaw)
-      : null;
+  for (const page of pages) {
+    const raw =
+      page?.extras?.raw_text ??
+      page?.extras?.rawText ??
+      page?.extras?.full_text ??
+      "";
 
-  const currency =
-    typeof currencyRaw === "string"
-      ? currencyRaw.toUpperCase()
-      : "NOK";
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      textChunks.push(raw);
+    }
+  }
 
-  const parsed: ParsedInvoice = {
-    vendor: supplierName ?? null,
-    invoiceNumber: invoiceNumber ?? null,
-    dateISO: dateISO ?? null,
-    total: Number.isFinite(total as number) ? (total as number) : null,
-    currency,
-    orgNumber: supplierOrg ?? null,
-    energyKwh: null,
-    fuelLiters: null,
-    gasM3: null,
-    co2Kg: null,
-    lines,
-  };
+  const fullText = textChunks.join("\n\n").trim();
 
-  return parsed;
+  if (!fullText) {
+    // fallback: stringify hele json hvis vi ikke fikk tekst (så ser vi hva som skjer)
+    return JSON.stringify(resultJson, null, 2);
+  }
+
+  return fullText;
 }
