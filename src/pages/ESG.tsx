@@ -12,7 +12,7 @@ type ESGData = {
 };
 
 function computeScore(totalPerInvoice: number): string {
-  // VELDIG enkel score-logikk, kan justeres:
+  // VELDIG enkel score-logikk, kan justeres senere:
   if (totalPerInvoice < 50) return "A";
   if (totalPerInvoice < 150) return "B";
   if (totalPerInvoice < 300) return "C";
@@ -25,42 +25,64 @@ export default function ESGPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        setLoading(true);
-        setError(null);
+  async function loadData() {
+    try {
+      setLoading(true);
+      setError(null);
 
-        const { data, error } = await supabase
-          .from("document")
-          .select("id, co2_kg")
-          .eq("org_id", ACTIVE_ORG_ID);
+      const { data, error } = await supabase
+        .from("document")
+        .select("id, co2_kg")
+        .eq("org_id", ACTIVE_ORG_ID);
 
-        if (error) throw error;
+      if (error) throw error;
 
-        const rows = data ?? [];
-        const invoiceCount = rows.length;
+      const rows = data ?? [];
+      const invoiceCount = rows.length;
 
-        const totalCo2 = rows.reduce(
-          (sum, r: any) => sum + (r.co2_kg ?? 0),
-          0
-        );
+      const totalCo2 = rows.reduce(
+        (sum, r: any) => sum + (r.co2_kg ?? 0),
+        0
+      );
 
-        // Midlertidig: alt på scope 3 inntil vi har kategorier
-        const scope1 = 0;
-        const scope2 = 0;
-        const scope3 = totalCo2;
+      // Foreløpig: alt på scope 3 til vi får kategorier
+      const scope1 = 0;
+      const scope2 = 0;
+      const scope3 = totalCo2;
 
-        setData({ scope1, scope2, scope3, totalCo2, invoiceCount });
-      } catch (err: any) {
-        console.error(err);
-        setError(err.message || "Kunne ikke laste ESG-data.");
-      } finally {
-        setLoading(false);
-      }
+      setData({ scope1, scope2, scope3, totalCo2, invoiceCount });
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Kunne ikke laste ESG-data.");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    load();
+  useEffect(() => {
+    // 1) Last data ved første render
+    loadData();
+
+    // 2) Realtime: last på nytt når det kommer nye dokument-rader
+    const channel = supabase
+      .channel("documents-esg")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "document",
+          filter: `org_id=eq.${ACTIVE_ORG_ID}`,
+        },
+        () => {
+          loadData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const score =
@@ -72,9 +94,6 @@ export default function ESGPage() {
     <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-semibold">ESG – utslipp</h1>
-        <p className="text-sm text-gray-600">
-          Scope 1–3 basert på registrerte fakturaer (foreløpig alt på scope 3).
-        </p>
       </header>
 
       {loading && <div>Laster...</div>}
