@@ -1,136 +1,135 @@
 // src/components/InvoiceTable.tsx
-import { useEffect, useState } from "react";
-import supabase from "../lib/supabase";
+import React, { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
-type Invoice = {
+type DocumentRow = {
   id: string;
-  filename: string | null;
-  vendor: string | null;
-  invoice_no: string | null;
-  invoice_date: string | null;
-  total: number | null;
+  issue_date: string | null;
+  supplier_name: string | null;
+  total_amount: number | null;
   currency: string | null;
-  total_co2_kg: number | null;
+  co2_kg: number | null;
+  file_path?: string | null;
 };
 
 export default function InvoiceTable() {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [rows, setRows] = useState<DocumentRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // ------------------------------
-  // 1. Last data fra databasen
-  // ------------------------------
-  async function loadInvoices() {
-    setLoading(true);
+  async function load() {
+    try {
+      setError(null);
+      setLoading(true);
 
-    const { data, error } = await supabase
-      .from("invoices")
-      .select(
-        `
-        id,
-        filename,
-        vendor,
-        invoice_no,
-        invoice_date,
-        total,
-        currency,
-        total_co2_kg
-      `
-      )
-      .order("created_at", { ascending: false });
+      const { data, error } = await supabase
+        .from("document")
+        .select(
+          "id, issue_date, supplier_name, total_amount, currency, co2_kg, file_path"
+        )
+        .order("issue_date", { ascending: false })
+        .limit(200);
 
-    if (!error && data) {
-      setInvoices(data as Invoice[]);
+      if (error) throw error;
+
+      setRows((data ?? []) as DocumentRow[]);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Kunne ikke hente dokumenter.");
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }
 
-  // ------------------------------
-  // 2. Real-time oppdateringer
-  // ------------------------------
   useEffect(() => {
-    loadInvoices();
+    load();
 
-    const channel = supabase
-      .channel("invoice-updates")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "invoices" },
-        () => loadInvoices()
-      )
-      .subscribe();
+    const handler = () => load();
+    window.addEventListener("invoice:updated", handler);
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => window.removeEventListener("invoice:updated", handler);
   }, []);
 
-  // ------------------------------
-  // 3. Formatteringer
-  // ------------------------------
-  const formatNumber = (n: number | null) =>
-    n == null ? "-" : n.toLocaleString("nb-NO", { minimumFractionDigits: 2 });
+  function formatNumber(n: number | null) {
+    if (n == null) return "-";
+    return n.toLocaleString("nb-NO", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  }
 
-  const formatDate = (d: string | null) =>
-    !d ? "-" : new Date(d).toLocaleDateString("nb-NO");
+  function formatCo2(n: number | null) {
+    if (n == null) return "-";
+    return n.toLocaleString("nb-NO", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    });
+  }
 
-  // ------------------------------
-  // 4. UI
-  // ------------------------------
-  if (loading) return <p>Laster fakturaer…</p>;
+  function formatDate(d: string | null) {
+    if (!d) return "-";
+    return new Date(d).toLocaleDateString("nb-NO");
+  }
 
   return (
-    <div className="overflow-x-auto mt-6">
-      <table className="min-w-full border text-sm">
-        <thead className="bg-slate-100 text-slate-700">
-          <tr>
-            <th className="border px-3 py-2">Dato</th>
-            <th className="border px-3 py-2">Leverandør</th>
-            <th className="border px-3 py-2">Faktura nr</th>
-            <th className="border px-3 py-2">Beløp</th>
-            <th className="border px-3 py-2">CO₂ (kg)</th>
-            <th className="border px-3 py-2">Fil</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {invoices.length === 0 && (
+    <div className="space-y-2">
+      {loading && <div className="text-xs text-slate-500">Laster...</div>}
+      {error && <div className="text-xs text-red-600">{error}</div>}
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-xs border border-slate-200">
+          <thead className="bg-slate-50 text-slate-600">
             <tr>
-              <td className="text-center py-4" colSpan={6}>
-                Ingen fakturaer funnet.
-              </td>
+              <th className="px-2 py-1 text-left border-b">Dato</th>
+              <th className="px-2 py-1 text-left border-b">Leverandør</th>
+              <th className="px-2 py-1 text-right border-b">Beløp</th>
+              <th className="px-2 py-1 text-right border-b">CO₂ (kg)</th>
+              <th className="px-2 py-1 text-center border-b">Fil</th>
             </tr>
-          )}
-
-          {invoices.map((inv) => (
-            <tr key={inv.id} className="hover:bg-slate-50">
-              <td className="border px-3 py-2">{formatDate(inv.invoice_date)}</td>
-              <td className="border px-3 py-2">{inv.vendor ?? "Ukjent"}</td>
-              <td className="border px-3 py-2">{inv.invoice_no ?? "-"}</td>
-              <td className="border px-3 py-2">
-                {inv.currency ?? "NOK"} {formatNumber(inv.total)}
-              </td>
-              <td className="border px-3 py-2">
-                {formatNumber(inv.total_co2_kg)}
-              </td>
-              <td className="border px-3 py-2">
-                {inv.filename ? (
-                  <a
-                    className="text-emerald-600 hover:underline"
-                    href={`https://<YOUR-SUPABASE-BUCKET-URL>/${inv.filename}`}
-                    target="_blank"
-                  >
-                    Åpne PDF
-                  </a>
-                ) : (
-                  "-"
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="border-b last:border-0">
+                <td className="px-2 py-1">{formatDate(r.issue_date)}</td>
+                <td className="px-2 py-1">
+                  {r.supplier_name ?? "Ukjent leverandør"}
+                </td>
+                <td className="px-2 py-1 text-right">
+                  {r.total_amount != null
+                    ? `${formatNumber(r.total_amount)} ${r.currency ?? "NOK"}`
+                    : "-"}
+                </td>
+                <td className="px-2 py-1 text-right">
+                  {formatCo2(r.co2_kg)}
+                </td>
+                <td className="px-2 py-1 text-center">
+                  {r.file_path ? (
+                    <a
+                      href={r.file_path}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-emerald-600 hover:underline"
+                    >
+                      Åpne
+                    </a>
+                  ) : (
+                    "-"
+                  )}
+                </td>
+              </tr>
+            ))}
+            {!loading && rows.length === 0 && (
+              <tr>
+                <td
+                  colSpan={5}
+                  className="px-2 py-4 text-center text-slate-400"
+                >
+                  Ingen dokumenter ennå. Last opp en faktura.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
