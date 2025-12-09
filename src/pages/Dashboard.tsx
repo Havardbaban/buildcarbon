@@ -20,7 +20,7 @@ export default function DashboardPage() {
 
       const { data, error } = await supabase
         .from("document")
-        .select("id, total_amount, co2_kg"); // ingen org-filter
+        .select("id, total_amount, co2_kg");
 
       if (error) throw error;
 
@@ -84,18 +84,18 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <header>
+      <header className="pb-2 border-b border-slate-200">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-gray-600">
-          Enkel oversikt over fakturaer og kostnader.
+        <p className="text-sm text-slate-600">
+          Nøkkeltall basert på alle registrerte fakturaer.
         </p>
       </header>
 
-      {loading && <div>Laster...</div>}
-      {error && <div className="text-red-600">{error}</div>}
+      {loading && <div className="text-sm text-slate-500">Laster...</div>}
+      {error && <div className="text-sm text-red-600">{error}</div>}
 
       {data && (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Antall fakturaer"
             value={data.invoiceCount.toLocaleString("nb-NO")}
@@ -121,7 +121,7 @@ export default function DashboardPage() {
               maximumFractionDigits: 1,
             })}
           />
-        </div>
+        </section>
       )}
     </div>
   );
@@ -134,11 +134,13 @@ type StatCardProps = {
 
 function StatCard({ label, value }: StatCardProps) {
   return (
-    <div className="border rounded-lg p-4 bg-white shadow-sm">
-      <div className="text-xs uppercase tracking-wide text-gray-500">
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4 flex flex-col justify-between">
+      <div className="text-xs uppercase tracking-wide text-slate-500">
         {label}
       </div>
-      <div className="mt-2 text-xl font-semibold">{value}</div>
+      <div className="mt-2 text-2xl font-semibold text-slate-900">
+        {value}
+      </div>
     </div>
   );
 }
