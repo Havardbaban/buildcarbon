@@ -28,7 +28,7 @@ export default function InvoiceUpload() {
     }
 
     try {
-      // 1) Last opp fil til Supabase storage
+      // 1) Last opp til storage
       setState("uploading");
       setProgress("Laster opp fil til lagring...");
 
@@ -45,13 +45,13 @@ export default function InvoiceUpload() {
         return;
       }
 
-      // 2) Kall ekstern OCR + vår invoice-parser
+      // 2) OCR + parsing
       setState("ocr");
       setProgress("Sender faktura til OCR-tjeneste...");
 
       const parsed = await runExternalOcr(file, (msg) => setProgress(msg));
 
-      // 3) Lagre i document-tabellen (uten action_* felt)
+      // 3) Lagre dokument
       setState("saving");
       setProgress("Lagrer faktura i databasen...");
 
@@ -81,7 +81,6 @@ export default function InvoiceUpload() {
 
       const documentId = data?.id as string | undefined;
 
-      // 4) Lagre linjeelementer + CO₂ hvis vi har noen
       if (documentId && parsed.lines.length > 0) {
         await saveDocumentLinesWithCo2(documentId, parsed.lines);
       }
@@ -89,6 +88,9 @@ export default function InvoiceUpload() {
       setState("done");
       setProgress("Faktura prosessert og lagret!");
       setError(null);
+
+      // 🔔 VIKTIG: si fra til resten av appen at det finnes nye dokumenter
+      window.dispatchEvent(new CustomEvent("invoice:updated"));
     } catch (err: any) {
       console.error(err);
       setError(err?.message || "Ukjent feil under prosessering.");
@@ -100,13 +102,7 @@ export default function InvoiceUpload() {
     state === "uploading" || state === "ocr" || state === "saving";
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Last opp faktura</h1>
-      <p className="text-sm text-gray-600">
-        Velg en PDF eller et bilde av en faktura. Systemet leser teksten,
-        beregner CO₂ og lagrer den på Demo Org.
-      </p>
-
+    <div className="space-y-3">
       <div className="flex items-center gap-4">
         <input
           type="file"
@@ -126,12 +122,12 @@ export default function InvoiceUpload() {
         </button>
       </div>
 
-      <div className="text-sm mt-2">
+      <div className="text-xs text-slate-600">
         <div>Status: {state}</div>
         {progress && <div>{progress}</div>}
-        {error && <div className="text-red-600">{error}</div>}
+        {error && <div className="text-red-600 mt-1">{error}</div>}
         {state === "done" && !error && (
-          <div className="text-emerald-700">
+          <div className="text-emerald-700 mt-1">
             Faktura prosessert og lagret!
           </div>
         )}
