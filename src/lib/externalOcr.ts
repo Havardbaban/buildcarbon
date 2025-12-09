@@ -25,7 +25,7 @@ export async function runExternalOcr(
   formData.append("file", file);
 
   // Norsk + engelsk, tabeller, bedre motor
-  formData.append("language", "nor+eng");
+  formData.append("language", "nor"); // norsk
   formData.append("isTable", "true");
   formData.append("scale", "true");
   formData.append("OCREngine", "2");
