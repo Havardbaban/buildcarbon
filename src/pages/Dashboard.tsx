@@ -1,7 +1,6 @@
 // src/pages/Dashboard.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { ACTIVE_ORG_ID } from "../lib/org";
 
 type Aggregates = {
   invoiceCount: number;
@@ -21,8 +20,7 @@ export default function DashboardPage() {
 
       const { data, error } = await supabase
         .from("document")
-        .select("id, total_amount, co2_kg")
-        .eq("org_id", ACTIVE_ORG_ID);
+        .select("id, total_amount, co2_kg"); // ingen org-filter
 
       if (error) throw error;
 
@@ -57,10 +55,8 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    // 1) Last initialt
     loadData();
 
-    // 2) Realtime: last på nytt ved nye dokumenter
     const channel = supabase
       .channel("documents-dashboard")
       .on(
@@ -69,7 +65,6 @@ export default function DashboardPage() {
           event: "INSERT",
           schema: "public",
           table: "document",
-          filter: `org_id=eq.${ACTIVE_ORG_ID}`,
         },
         () => {
           loadData();
@@ -77,7 +72,6 @@ export default function DashboardPage() {
       )
       .subscribe();
 
-    // 3) Fallback: poll hvert 15. sekund
     const interval = setInterval(() => {
       loadData();
     }, 15000);
