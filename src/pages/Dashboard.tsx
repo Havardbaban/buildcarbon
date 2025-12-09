@@ -15,50 +15,72 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        setLoading(true);
-        setError(null);
+  async function loadData() {
+    try {
+      setLoading(true);
+      setError(null);
 
-        const { data, error } = await supabase
-          .from("document")
-          .select("id, total_amount, co2_kg")
-          .eq("org_id", ACTIVE_ORG_ID);
+      const { data, error } = await supabase
+        .from("document")
+        .select("id, total_amount, co2_kg")
+        .eq("org_id", ACTIVE_ORG_ID);
 
-        if (error) throw error;
+      if (error) throw error;
 
-        const rows = data ?? [];
-        const invoiceCount = rows.length;
+      const rows = data ?? [];
+      const invoiceCount = rows.length;
 
-        const totalAmount = rows.reduce(
-          (sum, r: any) => sum + (r.total_amount ?? 0),
-          0
-        );
+      const totalAmount = rows.reduce(
+        (sum, r: any) => sum + (r.total_amount ?? 0),
+        0
+      );
 
-        const totalCo2Kg = rows.reduce(
-          (sum, r: any) => sum + (r.co2_kg ?? 0),
-          0
-        );
+      const totalCo2Kg = rows.reduce(
+        (sum, r: any) => sum + (r.co2_kg ?? 0),
+        0
+      );
 
-        const avgAmount =
-          invoiceCount > 0 ? totalAmount / invoiceCount : 0;
+      const avgAmount =
+        invoiceCount > 0 ? totalAmount / invoiceCount : 0;
 
-        setData({
-          invoiceCount,
-          totalAmount,
-          avgAmount,
-          totalCo2Kg,
-        });
-      } catch (err: any) {
-        console.error(err);
-        setError(err.message || "Kunne ikke laste data.");
-      } finally {
-        setLoading(false);
-      }
+      setData({
+        invoiceCount,
+        totalAmount,
+        avgAmount,
+        totalCo2Kg,
+      });
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Kunne ikke laste data.");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    load();
+  useEffect(() => {
+    // 1) Last data ved første render
+    loadData();
+
+    // 2) Realtime: last på nytt når det kommer nye dokument-rader
+    const channel = supabase
+      .channel("documents-dashboard")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "document",
+          filter: `org_id=eq.${ACTIVE_ORG_ID}`,
+        },
+        () => {
+          loadData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   return (
