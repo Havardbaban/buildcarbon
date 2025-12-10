@@ -1,8 +1,8 @@
-// src/pages/EsgPage.tsx
+// src/pages/ESG.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { ACTIVE_ORG_ID } from "../lib/org";
-import { calculateEsgEScore } from "../lib/emissions";
+import { calculateESGScore } from "../lib/emissions";
 
 type InvoiceRow = {
   id: string;
@@ -29,6 +29,7 @@ export default function EsgPage() {
         setLoading(false);
         return;
       }
+
       setRows((data ?? []) as InvoiceRow[]);
       setLoading(false);
     }
@@ -52,7 +53,7 @@ export default function EsgPage() {
       co2: Math.round(co2 * 10) / 10,
     }));
 
-    const esgScore = calculateEsgEScore(totalCo2, totalSpend);
+    const esgScore = calculateESGScore(totalCo2, totalSpend);
 
     const scopeWithMax =
       scopeArray.length > 0
