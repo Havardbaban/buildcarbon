@@ -2,13 +2,11 @@
 import React, { useState } from "react";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
-import { pdfToPngBlobs } from "../lib/pdfToImages";
-import { parseInvoiceLines } from "../lib/parseInvoiceLines";
 import { ACTIVE_ORG_ID } from "../lib/org";
 import {
-  estimateEmissionsKg,
   inferCategory,
   categoryToScope,
+  estimateEmissionsKg,
 } from "../lib/emissions";
 
 type FileStatus = "pending" | "processing" | "done" | "error";
@@ -22,11 +20,80 @@ type UploadItem = {
   message?: string;
 };
 
+// ---- simple helpers to pull data out of OCR text -----------------
+
+function extractAmountNok(text: string): number {
+  // Look for numbers like "9 765 815,00", "62 100 158 617,00", "1 111,00" etc.
+  const haystack = text.replace(/\u00A0/g, " "); // non-breaking spaces
+
+  const nokPatterns: RegExp[] = [
+    /(\d{1,3}(?:[ .]\d{3})*,\d{2})\s*(?:kr|nok)/gi,
+    /(\d{1,3}(?:[ .]\d{3})*,\d{2})/gi, // any amount with comma
+  ];
+
+  const candidates: number[] = [];
+
+  for (const pattern of nokPatterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(haystack)) !== null) {
+      const raw = match[1];
+      const normalized = raw.replace(/[ .]/g, "").replace(",", ".");
+      const value = parseFloat(normalized);
+      if (!Number.isNaN(value)) {
+        candidates.push(value);
+      }
+    }
+  }
+
+  if (!candidates.length) return 0;
+
+  // take the largest as total invoice amount
+  const max = Math.max(...candidates);
+  return max;
+}
+
+function extractVendor(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return "Unknown vendor";
+
+  // heuristics: first non-header-looking line
+  for (const line of lines) {
+    if (line.match(/faktura/i)) continue;
+    if (line.length < 3) continue;
+    return line.slice(0, 120);
+  }
+
+  return "Unknown vendor";
+}
+
+function extractInvoiceDate(text: string): string | null {
+  // match formats like 11.08.2025, 5.12.2025 etc.
+  const match =
+    text.match(
+      /(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})/
+    );
+  if (!match) return null;
+  const d = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  let y = parseInt(match[3], 10);
+  if (y < 100) y += 2000;
+  const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(
+    2,
+    "0"
+  )}`;
+  return iso;
+}
+
+// -----------------------------------------------------------------
+
 export default function InvoiceUpload() {
   const [items, setItems] = useState<UploadItem[]>([]);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
 
-  function handleFileSelect(files: FileList | File[]) {
+  function addFiles(files: FileList | File[]) {
     const fileArray = Array.from(files);
     const mapped: UploadItem[] = fileArray.map((file) => ({
       id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
@@ -41,32 +108,14 @@ export default function InvoiceUpload() {
   }
 
   async function ocrFile(file: File, onProgress: (p: number) => void) {
-    if (file.type === "application/pdf") {
-      const blobs = await pdfToPngBlobs(file);
-      let fullText = "";
-      for (let i = 0; i < blobs.length; i++) {
-        const blob = blobs[i];
-        const { data } = await Tesseract.recognize(blob, "nor+eng", {
-          logger: (m) => {
-            if (m.status === "recognizing text" && m.progress != null) {
-              const pageProgress = (i + m.progress) / blobs.length;
-              onProgress(Math.round(pageProgress * 100));
-            }
-          },
-        });
-        fullText += "\n" + data.text;
-      }
-      return fullText;
-    } else {
-      const { data } = await Tesseract.recognize(file, "nor+eng", {
-        logger: (m) => {
-          if (m.status === "recognizing text" && m.progress != null) {
-            onProgress(Math.round(m.progress * 100));
-          }
-        },
-      });
-      return data.text;
-    }
+    const { data } = await Tesseract.recognize(file, "nor+eng", {
+      logger: (m) => {
+        if (m.status === "recognizing text" && m.progress != null) {
+          onProgress(Math.round(m.progress * 100));
+        }
+      },
+    });
+    return data.text;
   }
 
   async function processItem(item: UploadItem) {
@@ -85,33 +134,35 @@ export default function InvoiceUpload() {
         );
       });
 
-      // Extract structured info from text (your existing helper)
-      const parsed = parseInvoiceLines(ocrText);
-      // Expected: { vendor, invoiceNumber, amountNok, currency, invoiceDate }
+      const vendor = extractVendor(ocrText);
+      const invoiceDate = extractInvoiceDate(ocrText);
+      const amountNok = extractAmountNok(ocrText); // <- key fix
 
-      const amountNok = parsed.amountNok ?? 0;
-      const category = inferCategory(parsed.vendor ?? "", ocrText);
+      const category = inferCategory(vendor, ocrText);
       const scope = categoryToScope(category);
-      const totalCo2Kg = estimateEmissionsKg({ amountNok, category });
+      const totalCo2Kg = estimateEmissionsKg({
+        amountNok,
+        category,
+      });
 
-      const { data, error } = await supabase.from("invoices").insert([
+      const { error } = await supabase.from("invoices").insert([
         {
           org_id: ACTIVE_ORG_ID,
-          vendor: parsed.vendor ?? "Unknown vendor",
-          invoice_number: parsed.invoiceNumber ?? null,
-          invoice_date: parsed.invoiceDate ?? null,
-          amount_nok: amountNok,
-          currency: parsed.currency ?? "NOK",
-          total_co2_kg: totalCo2Kg,
-          category,
+          vendor,
+          invoice_date: invoiceDate,
+          amount_nok: amountNok || null,
+          total_co2_kg: totalCo2Kg || null,
           scope,
+          category,
           status: "parsed",
           ocr_text: ocrText,
-          // you can also store file_url if you upload the file to storage first
         },
       ]);
 
-      if (error) throw error;
+      if (error) {
+        console.error(error);
+        throw error;
+      }
 
       setItems((prev) =>
         prev.map((it) =>
@@ -120,7 +171,9 @@ export default function InvoiceUpload() {
                 ...it,
                 status: "done",
                 progress: 100,
-                message: `Saved. CO₂: ${totalCo2Kg.toFixed(1)} kg`,
+                message: `Saved. CO₂: ${totalCo2Kg.toFixed(
+                  1
+                )} kg • Amount: ${amountNok.toFixed(2)} NOK`,
               }
             : it
         )
@@ -133,7 +186,7 @@ export default function InvoiceUpload() {
             ? {
                 ...it,
                 status: "error",
-                message: err.message ?? "Unexpected error",
+                message: err?.message ?? "Unexpected error",
               }
             : it
         )
@@ -154,13 +207,19 @@ export default function InvoiceUpload() {
 
   return (
     <div className="space-y-4">
+      <h1 className="text-3xl font-bold">Last opp faktura</h1>
+      <p className="text-sm text-gray-500">
+        Velg en PDF eller et bilde av en faktura. Systemet leser teksten,
+        beregner CO₂ og lagrer den på Demo Org.
+      </p>
+
       <div
         className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-6 py-10 text-center"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
           if (e.dataTransfer.files?.length) {
-            handleFileSelect(e.dataTransfer.files);
+            addFiles(e.dataTransfer.files);
           }
         }}
       >
@@ -169,7 +228,7 @@ export default function InvoiceUpload() {
           Slipp filer her, eller klikk for å velge. Vi leser norsk og engelsk, og
           beregner CO₂ automatisk.
         </p>
-        <label className="cursor-pointer rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow">
+        <label className="cursor-pointer rounded-full bg-green-700 px-4 py-2 text-sm font-medium text-white shadow">
           Velg filer
           <input
             type="file"
@@ -177,7 +236,7 @@ export default function InvoiceUpload() {
             className="hidden"
             accept="application/pdf,image/*"
             onChange={(e) => {
-              if (e.target.files) handleFileSelect(e.target.files);
+              if (e.target.files) addFiles(e.target.files);
             }}
           />
         </label>
@@ -186,15 +245,16 @@ export default function InvoiceUpload() {
       {items.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <h3 className="font-semibold">Kø</h3>
+            <h2 className="font-semibold">Kø</h2>
             <button
-              className="rounded-full bg-emerald-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-50"
+              className="rounded-full bg-green-700 px-4 py-1 text-sm font-medium text-white disabled:opacity-50"
               onClick={handleProcessAll}
               disabled={isProcessingAll}
             >
               {isProcessingAll ? "Behandler…" : "Start behandling"}
             </button>
           </div>
+
           <ul className="space-y-2">
             {items.map((item) => (
               <li
@@ -206,7 +266,7 @@ export default function InvoiceUpload() {
                   <span
                     className={
                       item.status === "done"
-                        ? "text-emerald-600"
+                        ? "text-green-700"
                         : item.status === "error"
                         ? "text-red-600"
                         : "text-gray-500"
@@ -217,7 +277,7 @@ export default function InvoiceUpload() {
                 </div>
                 <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
                   <div
-                    className="h-full rounded-full bg-emerald-500 transition-all"
+                    className="h-full rounded-full bg-green-600 transition-all"
                     style={{ width: `${item.progress}%` }}
                   />
                 </div>
