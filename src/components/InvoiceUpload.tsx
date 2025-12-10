@@ -6,7 +6,7 @@ import {
   inferCategory,
   categoryToScope,
   estimateEmissionsKg,
-} from "../lib/emissions";
+} from "../lib/emissionFactors"; // or "../lib/emissions" if you re-export there
 
 type FileStatus = "pending" | "processing" | "done" | "error";
 
@@ -22,31 +22,33 @@ type UploadItem = {
 const MINDEE_INVOICE_URL =
   "https://api.mindee.net/v1/products/mindee/invoices/v4/predict";
 
-// --- Mindee call (REST API, no extra packages) --------------------
+// --- Mindee call via REST (no @mindee/client package) --------------------
 
 async function parseWithMindee(file: File) {
-  const apiKey = import.meta.env.VITE_MINDEE_API_KEY;
+  const apiKey = import.meta.env.VITE_MINDEE_API_KEY as string | undefined;
   if (!apiKey) {
     throw new Error(
-      "Missing VITE_MINDEE_API_KEY. Set it in Vercel environment variables."
+      "VITE_MINDEE_API_KEY mangler. Legg den inn som env-variabel i Vercel."
     );
   }
 
-  const formData = new FormData();
-  formData.append("document", file);
+  const form = new FormData();
+  form.append("document", file);
 
   const res = await fetch(MINDEE_INVOICE_URL, {
     method: "POST",
     headers: {
       Authorization: `Token ${apiKey}`,
     },
-    body: formData,
+    body: form,
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `Mindee error ${res.status}: ${text.slice(0, 200) || res.statusText}`
+      `Mindee ${res.status}: ${
+        text.slice(0, 200) || res.statusText || "Ukjent feil"
+      }`
     );
   }
 
@@ -54,8 +56,8 @@ async function parseWithMindee(file: File) {
   return json;
 }
 
-// Helper to safely pull a single value from Mindee field { value: ... }
-function getFieldValue(field: any): any {
+// Helper for Mindee fields like { value: ... }
+function getValue(field: any): any {
   if (!field) return undefined;
   if (typeof field.value !== "undefined") return field.value;
   if (Array.isArray(field) && field[0] && typeof field[0].value !== "undefined") {
@@ -64,7 +66,7 @@ function getFieldValue(field: any): any {
   return undefined;
 }
 
-// -----------------------------------------------------------------
+// ------------------------------------------------------------------------
 
 export default function InvoiceUpload() {
   const [items, setItems] = useState<UploadItem[]>([]);
@@ -92,46 +94,56 @@ export default function InvoiceUpload() {
     );
 
     try {
-      // 1) Call Mindee
+      // 1) Send til Mindee
       const mindeeJson = await parseWithMindee(item.file);
 
       const prediction =
-        mindeeJson?.document?.inference?.prediction ?? mindeeJson?.prediction ?? {};
+        mindeeJson?.document?.inference?.prediction ??
+        mindeeJson?.prediction ??
+        {};
 
-      const vendor =
-        getFieldValue(prediction.supplier_name) ||
-        getFieldValue(prediction.supplier) ||
+      // 2) Hent felter fra Mindee
+      const vendorRaw =
+        getValue(prediction.supplier_name) ??
+        getValue(prediction.supplier) ??
         "Unknown vendor";
 
-      const invoiceDate =
-        getFieldValue(prediction.date) || getFieldValue(prediction.invoice_date) || null;
+      const invoiceDateRaw =
+        getValue(prediction.date) ?? getValue(prediction.invoice_date) ?? null;
 
       const amountRaw =
-        getFieldValue(prediction.total_amount) ||
-        getFieldValue(prediction.total_incl) ||
-        getFieldValue(prediction.total_excl) ||
+        getValue(prediction.total_amount) ??
+        getValue(prediction.total_incl) ??
+        getValue(prediction.total_excl) ??
         0;
 
-      const amountNok = typeof amountRaw === "number" ? amountRaw : parseFloat(amountRaw) || 0;
+      const vendor =
+        typeof vendorRaw === "string" ? vendorRaw : String(vendorRaw);
+      const invoiceDate =
+        typeof invoiceDateRaw === "string" ? invoiceDateRaw : null;
+      const amount_nok =
+        typeof amountRaw === "number"
+          ? amountRaw
+          : parseFloat(String(amountRaw).replace(",", ".")) || 0;
 
-      // 2) CO2 calculation
+      // 3) CO₂-logikk
       const category = inferCategory(vendor, JSON.stringify(prediction));
       const scope = categoryToScope(category);
-      const totalCo2Kg = estimateEmissionsKg({
-        amountNok,
+      const total_co2_kg = estimateEmissionsKg({
+        amountNok: amount_nok,
         category,
       });
 
-      // 3) Save to Supabase
+      // 4) Lagre i Supabase
       const { error } = await supabase.from("invoices").insert([
         {
           org_id: ACTIVE_ORG_ID,
           vendor,
           invoice_date: invoiceDate,
-          amount_nok: amountNok || null,
+          amount_nok,
           category,
           scope,
-          total_co2_kg: totalCo2Kg || null,
+          total_co2_kg,
           status: "parsed",
           ocr_text: JSON.stringify(prediction),
         },
@@ -141,7 +153,7 @@ export default function InvoiceUpload() {
         throw new Error(error.message ?? "Supabase insert error");
       }
 
-      // 4) Update UI
+      // 5) Ferdig i UI
       setItems((prev) =>
         prev.map((x) =>
           x.id === item.id
@@ -149,9 +161,9 @@ export default function InvoiceUpload() {
                 ...x,
                 status: "done",
                 progress: 100,
-                message: `Saved • ${amountNok.toFixed(
+                message: `Saved • ${amount_nok.toFixed(
                   2
-                )} NOK • ${totalCo2Kg.toFixed(1)} kg CO₂`,
+                )} NOK • ${total_co2_kg.toFixed(1)} kg CO₂`,
               }
             : x
         )
@@ -166,11 +178,7 @@ export default function InvoiceUpload() {
       setItems((prev) =>
         prev.map((x) =>
           x.id === item.id
-            ? {
-                ...x,
-                status: "error",
-                message: msg,
-              }
+            ? { ...x, status: "error", message: msg, progress: 0 }
             : x
         )
       );
@@ -190,10 +198,10 @@ export default function InvoiceUpload() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-3xl font-bold">Last opp faktura</h1>
+      <h2 className="text-3xl font-bold">Last opp faktura</h2>
       <p className="text-sm text-gray-500">
-        Velg en PDF eller et bilde av en faktura. Vi bruker Mindee til å lese
-        fakturaen, beregner CO₂ og lagrer resultatet.
+        Last opp PDF eller bilde av faktura. Vi bruker Mindee til å lese
+        fakturaen, beregner CO₂ og lagrer den på Demo Org.
       </p>
 
       <div
@@ -208,7 +216,7 @@ export default function InvoiceUpload() {
       >
         <p className="mb-2 font-semibold">Last opp fakturaer</p>
         <p className="mb-4 text-sm text-gray-500">
-          Slipp filer her, eller klikk for å velge. Du kan laste opp flere
+          Slipp filer her, eller klikk for å velge. Du kan laste opp mange
           samtidig.
         </p>
         <label className="cursor-pointer rounded-full bg-green-700 px-4 py-2 text-sm font-medium text-white">
@@ -228,7 +236,7 @@ export default function InvoiceUpload() {
       {items.length > 0 && (
         <>
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold">Kø</h2>
+            <h3 className="font-semibold">Kø</h3>
             <button
               className="rounded-full bg-green-700 px-4 py-1 text-sm font-medium text-white disabled:opacity-50"
               onClick={handleProcessAll}
@@ -237,6 +245,7 @@ export default function InvoiceUpload() {
               {processing ? "Behandler…" : "Start behandling"}
             </button>
           </div>
+
           <ul className="space-y-2">
             {items.map((item) => (
               <li
