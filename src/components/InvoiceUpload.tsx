@@ -1,11 +1,15 @@
 // src/components/InvoiceUpload.tsx
-
 import React, { useState } from "react";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
-import parseInvoice, { toInvoiceDbRow } from "../lib/invoiceParser";
+import { parseInvoiceLines } from "../lib/parseInvoiceLines";
 import { ACTIVE_ORG_ID } from "../lib/org";
+import {
+  estimateEmissionsKg,
+  inferCategory,
+  categoryToScope,
+} from "../lib/emissions";
 
 type FileStatus = "pending" | "processing" | "done" | "error";
 
@@ -22,8 +26,9 @@ export default function InvoiceUpload() {
   const [items, setItems] = useState<UploadItem[]>([]);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
 
-  function handleFileSelect(files: File[]) {
-    const mapped: UploadItem[] = files.map((file) => ({
+  function handleFileSelect(files: FileList | File[]) {
+    const fileArray = Array.from(files);
+    const mapped: UploadItem[] = fileArray.map((file) => ({
       id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
         .toString(36)
         .slice(2)}`,
@@ -32,315 +37,198 @@ export default function InvoiceUpload() {
       status: "pending",
       progress: 0,
     }));
-
     setItems((prev) => [...prev, ...mapped]);
   }
 
-  function onInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    if (!e.target.files?.length) return;
-    handleFileSelect(Array.from(e.target.files));
-    // nullstill input så man kan velge samme fil igjen senere om ønskelig
-    e.target.value = "";
-  }
-
-  function updateItem(id: string, patch: Partial<UploadItem>) {
-    setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
-    );
-  }
-
-  async function processSingleItem(item: UploadItem) {
-    updateItem(item.id, {
-      status: "processing",
-      progress: 5,
-      message: "Starter behandling…",
-    });
-
-    try {
-      const file = item.file;
-
-      const isPdf =
-        file.type === "application/pdf" ||
-        file.name.toLowerCase().endsWith(".pdf");
-
-      let imageBlobs: Blob[] = [];
-
-      if (isPdf) {
-        // Konverter PDF til PNG per side
-        imageBlobs = await pdfToPngBlobs(file);
-        if (!imageBlobs.length) {
-          throw new Error("Fant ingen sider i PDF-filen.");
-        }
-      } else {
-        // Direkte på bilde
-        imageBlobs = [file];
-      }
-
+  async function ocrFile(file: File, onProgress: (p: number) => void) {
+    if (file.type === "application/pdf") {
+      const blobs = await pdfToPngBlobs(file);
       let fullText = "";
-      const pagesCount = imageBlobs.length;
-
-      // 10–85%: OCR, siste 15% til lagring
-      for (let i = 0; i < pagesCount; i++) {
-        const blob = imageBlobs[i];
-
+      for (let i = 0; i < blobs.length; i++) {
+        const blob = blobs[i];
         const { data } = await Tesseract.recognize(blob, "nor+eng", {
           logger: (m) => {
-            if (m.status === "recognizing text") {
-              const ocrSpan = 75; // prosentpoeng reservert til OCR (10–85)
-              const basePerPage = ocrSpan / pagesCount;
-              const pageProgress = m.progress * basePerPage; // 0–basePerPage
-              const completedPagesProgress = basePerPage * i;
-              const totalProgress = 10 + completedPagesProgress + pageProgress;
-              updateItem(item.id, {
-                progress: Math.min(90, Math.round(totalProgress)),
-              });
+            if (m.status === "recognizing text" && m.progress != null) {
+              const pageProgress = (i + m.progress) / blobs.length;
+              onProgress(Math.round(pageProgress * 100));
             }
           },
         });
-
-        fullText += "\n\n" + data.text;
+        fullText += "\n" + data.text;
       }
+      return fullText;
+    } else {
+      const { data } = await Tesseract.recognize(file, "nor+eng", {
+        logger: (m) => {
+          if (m.status === "recognizing text" && m.progress != null) {
+            onProgress(Math.round(m.progress * 100));
+          }
+        },
+      });
+      return data.text;
+    }
+  }
 
-      if (!fullText.trim()) {
-        throw new Error("Ingen tekst funnet i fakturaen.");
-      }
+  async function processItem(item: UploadItem) {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === item.id ? { ...it, status: "processing", progress: 5 } : it
+      )
+    );
 
-      updateItem(item.id, {
-        message: "Tolker faktura…",
-        progress: 90,
+    try {
+      const ocrText = await ocrFile(item.file, (p) => {
+        setItems((prev) =>
+          prev.map((it) =>
+            it.id === item.id ? { ...it, progress: Math.max(it.progress, p) } : it
+          )
+        );
       });
 
-      // 1) Parse hele fakturaen til struktur
-      const parsed = await parseInvoice(fullText);
+      // Extract structured info from text (your existing helper)
+      const parsed = parseInvoiceLines(ocrText);
+      // Expected: { vendor, invoiceNumber, amountNok, currency, invoiceDate }
 
-      // 2) Lagre rå OCR + parsed_json til invoices_raw
-      const { error: rawError } = await supabase.from("invoices_raw").insert({
-        org_id: ACTIVE_ORG_ID,
-        file_name: file.name,
-        mime_type: file.type,
-        storage_path: null, // vi lagrer ikke til storage ennå
-        ocr_text: fullText,
-        parsed_json: parsed, // jsonb
-        status: "done",
-      });
+      const amountNok = parsed.amountNok ?? 0;
+      const category = inferCategory(parsed.vendor ?? "", ocrText);
+      const scope = categoryToScope(category);
+      const totalCo2Kg = estimateEmissionsKg({ amountNok, category });
 
-      if (rawError) {
-        console.error(rawError);
-        throw new Error(rawError.message || "Klarte ikke å lagre råfaktura.");
-      }
+      const { data, error } = await supabase.from("invoices").insert([
+        {
+          org_id: ACTIVE_ORG_ID,
+          vendor: parsed.vendor ?? "Unknown vendor",
+          invoice_number: parsed.invoiceNumber ?? null,
+          invoice_date: parsed.invoiceDate ?? null,
+          amount_nok: amountNok,
+          currency: parsed.currency ?? "NOK",
+          total_co2_kg: totalCo2Kg,
+          category,
+          scope,
+          status: "parsed",
+          ocr_text: ocrText,
+          // you can also store file_url if you upload the file to storage first
+        },
+      ]);
 
-      // 3) Lag rad til hoved-tabellen `invoices` (for dashboardet)
-      const invoiceRow = toInvoiceDbRow(parsed, ACTIVE_ORG_ID);
+      if (error) throw error;
 
-      const { error: invoiceError } = await supabase
-        .from("invoices")
-        .insert(invoiceRow);
-
-      if (invoiceError) {
-        console.error(invoiceError);
-        throw new Error(invoiceError.message || "Klarte ikke å lagre faktura.");
-      }
-
-      // 4) Oppdater UI-status
-      updateItem(item.id, {
-        status: "done",
-        progress: 100,
-        message: "Ferdig",
-      });
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === item.id
+            ? {
+                ...it,
+                status: "done",
+                progress: 100,
+                message: `Saved. CO₂: ${totalCo2Kg.toFixed(1)} kg`,
+              }
+            : it
+        )
+      );
     } catch (err: any) {
       console.error(err);
-      updateItem(item.id, {
-        status: "error",
-        progress: 100,
-        message:
-          err?.message ||
-          "Noe gikk galt under behandling. Prøv igjen eller kontakt støtte.",
-      });
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === item.id
+            ? {
+                ...it,
+                status: "error",
+                message: err.message ?? "Unexpected error",
+              }
+            : it
+        )
+      );
     }
   }
 
   async function handleProcessAll() {
-    if (!items.length) return;
     setIsProcessingAll(true);
-
-    // Prosesser sekvensielt (en etter en) for å ikke drepe browseren/kvoten
     for (const item of items) {
-      if (item.status === "done") continue; // hopp over allerede ferdige
-      await processSingleItem(item);
+      if (item.status === "pending" || item.status === "error") {
+        // eslint-disable-next-line no-await-in-loop
+        await processItem(item);
+      }
     }
-
     setIsProcessingAll(false);
   }
 
-  async function handleProcessSingle(id: string) {
-    const item = items.find((x) => x.id === id);
-    if (!item) return;
-    await processSingleItem(item);
-  }
-
-  function handleClearFinished() {
-    setItems((prev) => prev.filter((item) => item.status !== "done"));
-  }
-
-  function handleClearAll() {
-    setItems([]);
-  }
-
-  const pendingCount = items.filter((i) => i.status === "pending").length;
-  const processingCount = items.filter((i) => i.status === "processing").length;
-
   return (
-    <div className="space-y-6">
-      {/* Toppseksjon med opplasting */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Last opp fakturaer
-        </h2>
-        <p className="mt-1 text-sm text-slate-500">
-          Dra inn eller velg flere PDF- eller bildefiler. Vi leser norsk og
-          engelsk med OCR og lagrer resultatet automatisk.
+    <div className="space-y-4">
+      <div
+        className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-6 py-10 text-center"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (e.dataTransfer.files?.length) {
+            handleFileSelect(e.dataTransfer.files);
+          }
+        }}
+      >
+        <p className="mb-2 font-semibold">Last opp fakturaer</p>
+        <p className="mb-4 text-sm text-gray-500">
+          Slipp filer her, eller klikk for å velge. Vi leser norsk og engelsk, og
+          beregner CO₂ automatisk.
         </p>
-
-        <div className="mt-4">
-          <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 px-6 py-10 text-center transition hover:border-emerald-400 hover:bg-emerald-50/40">
-            <span className="text-sm font-medium text-slate-800">
-              Slipp filer her, eller klikk for å velge
-            </span>
-            <span className="mt-1 text-xs text-slate-400">
-              Støtter PDF, PNG, JPG. Du kan velge mange samtidig.
-            </span>
-            <input
-              type="file"
-              multiple
-              accept="application/pdf,image/*"
-              className="hidden"
-              onChange={onInputChange}
-            />
-          </label>
-        </div>
-
-        {items.length > 0 && (
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleProcessAll}
-              disabled={isProcessingAll || items.length === 0}
-              className="inline-flex items-center justify-center rounded-full bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-200"
-            >
-              {isProcessingAll ? "Behandler alle…" : "Start behandling av alle"}
-            </button>
-
-            <button
-              onClick={handleClearFinished}
-              className="text-xs text-slate-500 hover:text-slate-700"
-            >
-              Fjern ferdige
-            </button>
-
-            <button
-              onClick={handleClearAll}
-              className="text-xs text-slate-500 hover:text-slate-700"
-            >
-              Nullstill liste
-            </button>
-
-            <div className="ml-auto text-xs text-slate-500">
-              {pendingCount > 0 && (
-                <span className="mr-3">
-                  Venter: <span className="font-medium">{pendingCount}</span>
-                </span>
-              )}
-              {processingCount > 0 && (
-                <span>
-                  Pågår:{" "}
-                  <span className="font-medium">{processingCount}</span>
-                </span>
-              )}
-            </div>
-          </div>
-        )}
+        <label className="cursor-pointer rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow">
+          Velg filer
+          <input
+            type="file"
+            multiple
+            className="hidden"
+            accept="application/pdf,image/*"
+            onChange={(e) => {
+              if (e.target.files) handleFileSelect(e.target.files);
+            }}
+          />
+        </label>
       </div>
 
-      {/* Liste over filer */}
       {items.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-900">
-              {items.length} fil(er) i kø
-            </h3>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold">Kø</h3>
+            <button
+              className="rounded-full bg-emerald-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-50"
+              onClick={handleProcessAll}
+              disabled={isProcessingAll}
+            >
+              {isProcessingAll ? "Behandler…" : "Start behandling"}
+            </button>
           </div>
-
-          <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+          <ul className="space-y-2">
             {items.map((item) => (
-              <div
+              <li
                 key={item.id}
-                className="flex flex-col rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-sm"
+                className="rounded-xl border bg-white px-3 py-2 text-sm"
               >
-                <div className="flex items-center gap-2">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-medium text-slate-900">
-                        {item.name}
-                      </span>
-                      <StatusPill status={item.status} />
-                    </div>
-                    {item.message && (
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        {item.message}
-                      </p>
-                    )}
-                  </div>
-
-                  <button
-                    onClick={() => handleProcessSingle(item.id)}
-                    disabled={
-                      item.status === "processing" ||
-                      item.status === "done" ||
-                      isProcessingAll
+                <div className="flex justify-between">
+                  <span className="font-medium">{item.name}</span>
+                  <span
+                    className={
+                      item.status === "done"
+                        ? "text-emerald-600"
+                        : item.status === "error"
+                        ? "text-red-600"
+                        : "text-gray-500"
                     }
-                    className="ml-3 whitespace-nowrap rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:border-emerald-400 hover:text-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300"
                   >
-                    Kjør kun denne
-                  </button>
+                    {item.status}
+                  </span>
                 </div>
-
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
                   <div
                     className="h-full rounded-full bg-emerald-500 transition-all"
                     style={{ width: `${item.progress}%` }}
                   />
                 </div>
-              </div>
+                {item.message && (
+                  <p className="mt-1 text-xs text-gray-500">{item.message}</p>
+                )}
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       )}
     </div>
-  );
-}
-
-function StatusPill({ status }: { status: FileStatus }) {
-  const base =
-    "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium";
-  if (status === "pending") {
-    return (
-      <span className={`${base} bg-slate-100 text-slate-600`}>Venter</span>
-    );
-  }
-  if (status === "processing") {
-    return (
-      <span className={`${base} bg-amber-100 text-amber-700`}>
-        Behandler…
-      </span>
-    );
-  }
-  if (status === "done") {
-    return (
-      <span className={`${base} bg-emerald-100 text-emerald-700`}>
-        Ferdig
-      </span>
-    );
-  }
-  return (
-    <span className={`${base} bg-rose-100 text-rose-700`}>Feil</span>
   );
 }
