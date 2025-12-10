@@ -1,12 +1,15 @@
 // src/components/InvoiceUpload.tsx
+//
+// New invoice upload & processing flow using Azure Document Intelligence.
+// - User selects multiple files
+// - We queue them
+// - For each file we call Azure, compute CO₂, and insert a row into Supabase
+//
+
 import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { ACTIVE_ORG_ID } from "../lib/org";
-import {
-  inferCategory,
-  categoryToScope,
-  estimateEmissionsKg,
-} from "../lib/emissionFactors"; // or "../lib/emissions" if you re-export there
+import { analyzeInvoiceWithAzure, ParsedInvoice } from "../lib/azureInvoice";
 
 type FileStatus = "pending" | "processing" | "done" | "error";
 
@@ -15,271 +18,258 @@ type UploadItem = {
   file: File;
   name: string;
   status: FileStatus;
-  progress: number;
   message?: string;
+  co2Kg?: number;
+  amountNok?: number;
 };
-
-const MINDEE_INVOICE_URL =
-  "https://api.mindee.net/v1/products/mindee/invoices/v4/predict";
-
-// --- Mindee call via REST (no @mindee/client package) --------------------
-
-async function parseWithMindee(file: File) {
-  const apiKey = import.meta.env.VITE_MINDEE_API_KEY as string | undefined;
-  if (!apiKey) {
-    throw new Error(
-      "VITE_MINDEE_API_KEY mangler. Legg den inn som env-variabel i Vercel."
-    );
-  }
-
-  const form = new FormData();
-  form.append("document", file);
-
-  const res = await fetch(MINDEE_INVOICE_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${apiKey}`,
-    },
-    body: form,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `Mindee ${res.status}: ${
-        text.slice(0, 200) || res.statusText || "Ukjent feil"
-      }`
-    );
-  }
-
-  const json = await res.json();
-  return json;
-}
-
-// Helper for Mindee fields like { value: ... }
-function getValue(field: any): any {
-  if (!field) return undefined;
-  if (typeof field.value !== "undefined") return field.value;
-  if (Array.isArray(field) && field[0] && typeof field[0].value !== "undefined") {
-    return field[0].value;
-  }
-  return undefined;
-}
-
-// ------------------------------------------------------------------------
 
 export default function InvoiceUpload() {
   const [items, setItems] = useState<UploadItem[]>([]);
-  const [processing, setProcessing] = useState(false);
+  const [isProcessingAll, setIsProcessingAll] = useState(false);
 
-  function addFiles(files: FileList | File[]) {
-    const arr = Array.from(files);
-    const mapped: UploadItem[] = arr.map((file) => ({
+  // ---- file selection ----------------------------------------------------
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || !files.length) return;
+
+    const newItems: UploadItem[] = Array.from(files).map((file) => ({
       id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
         .toString(36)
         .slice(2)}`,
       file,
       name: file.name,
       status: "pending",
-      progress: 0,
     }));
-    setItems((prev) => [...prev, ...mapped]);
+
+    setItems((prev) => [...prev, ...newItems]);
+    e.target.value = "";
   }
 
-  async function processOne(item: UploadItem) {
-    setItems((prev) =>
-      prev.map((x) =>
-        x.id === item.id ? { ...x, status: "processing", progress: 10 } : x
-      )
-    );
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const files = e.dataTransfer.files;
+    if (!files || !files.length) return;
 
+    const newItems: UploadItem[] = Array.from(files).map((file) => ({
+      id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
+        .toString(36)
+        .slice(2)}`,
+      file,
+      name: file.name,
+      status: "pending",
+    }));
+
+    setItems((prev) => [...prev, ...newItems]);
+  }
+
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+  }
+
+  // ---- processing --------------------------------------------------------
+
+  async function processSingleItem(item: UploadItem): Promise<UploadItem> {
     try {
-      // 1) Send til Mindee
-      const mindeeJson = await parseWithMindee(item.file);
+      const parsed: ParsedInvoice = await analyzeInvoiceWithAzure(item.file);
 
-      const prediction =
-        mindeeJson?.document?.inference?.prediction ??
-        mindeeJson?.prediction ??
-        {};
-
-      // 2) Hent felter fra Mindee
-      const vendorRaw =
-        getValue(prediction.supplier_name) ??
-        getValue(prediction.supplier) ??
-        "Unknown vendor";
-
-      const invoiceDateRaw =
-        getValue(prediction.date) ?? getValue(prediction.invoice_date) ?? null;
-
-      const amountRaw =
-        getValue(prediction.total_amount) ??
-        getValue(prediction.total_incl) ??
-        getValue(prediction.total_excl) ??
-        0;
-
-      const vendor =
-        typeof vendorRaw === "string" ? vendorRaw : String(vendorRaw);
-      const invoiceDate =
-        typeof invoiceDateRaw === "string" ? invoiceDateRaw : null;
-      const amount_nok =
-        typeof amountRaw === "number"
-          ? amountRaw
-          : parseFloat(String(amountRaw).replace(",", ".")) || 0;
-
-      // 3) CO₂-logikk
-      const category = inferCategory(vendor, JSON.stringify(prediction));
-      const scope = categoryToScope(category);
-      const total_co2_kg = estimateEmissionsKg({
-        amountNok: amount_nok,
-        category,
+      // Insert into Supabase "invoices" table
+      const { error } = await supabase.from("invoices").insert({
+        org_id: ACTIVE_ORG_ID,
+        vendor: parsed.supplierName,
+        customer_name: parsed.customerName,
+        invoice_number: parsed.invoiceNumber,
+        invoice_date: parsed.invoiceDate, // column is DATE; we pass "YYYY-MM-DD"
+        due_date: parsed.dueDate,
+        amount_nok: parsed.totalAmountNok,
+        currency: parsed.currency,
+        total_co2_kg: parsed.co2KgEstimate,
+        scope: parsed.scope,
+        status: "parsed",
       });
 
-      // 4) Lagre i Supabase
-      const { error } = await supabase.from("invoices").insert([
-        {
-          org_id: ACTIVE_ORG_ID,
-          vendor,
-          invoice_date: invoiceDate,
-          amount_nok,
-          category,
-          scope,
-          total_co2_kg,
-          status: "parsed",
-          ocr_text: JSON.stringify(prediction),
-        },
-      ]);
-
       if (error) {
-        throw new Error(error.message ?? "Supabase insert error");
+        console.error("Supabase insert error", error);
+        return {
+          ...item,
+          status: "error",
+          message: `Supabase error: ${error.message}`,
+        };
       }
 
-      // 5) Ferdig i UI
-      setItems((prev) =>
-        prev.map((x) =>
-          x.id === item.id
-            ? {
-                ...x,
-                status: "done",
-                progress: 100,
-                message: `Saved • ${amount_nok.toFixed(
-                  2
-                )} NOK • ${total_co2_kg.toFixed(1)} kg CO₂`,
-              }
-            : x
-        )
-      );
+      return {
+        ...item,
+        status: "done",
+        co2Kg: parsed.co2KgEstimate,
+        amountNok: parsed.totalAmountNok,
+        message: `Saved to database – CO₂: ${parsed.co2KgEstimate.toFixed(
+          1
+        )} kg`,
+      };
     } catch (err: any) {
-      console.error("Invoice upload error:", err);
-      const msg =
-        typeof err === "string"
-          ? err
-          : err?.message || err?.error_description || JSON.stringify(err);
-
-      setItems((prev) =>
-        prev.map((x) =>
-          x.id === item.id
-            ? { ...x, status: "error", message: msg, progress: 0 }
-            : x
-        )
-      );
+      console.error("Processing error", err);
+      return {
+        ...item,
+        status: "error",
+        message: err?.message ?? "Unexpected error",
+      };
     }
   }
 
   async function handleProcessAll() {
-    setProcessing(true);
-    for (const item of items) {
-      if (item.status === "pending" || item.status === "error") {
-        // eslint-disable-next-line no-await-in-loop
-        await processOne(item);
+    if (isProcessingAll) return;
+    if (!items.some((i) => i.status === "pending")) return;
+
+    setIsProcessingAll(true);
+
+    try {
+      let updated = [...items];
+
+      for (let i = 0; i < updated.length; i++) {
+        const item = updated[i];
+        if (item.status !== "pending") continue;
+
+        updated[i] = { ...item, status: "processing", message: "Behandler..." };
+        setItems([...updated]);
+
+        const processed = await processSingleItem(updated[i]);
+        updated[i] = processed;
+        setItems([...updated]);
       }
+    } finally {
+      setIsProcessingAll(false);
     }
-    setProcessing(false);
   }
 
+  // ---- UI ----------------------------------------------------------------
+
   return (
-    <div className="space-y-4">
-      <h2 className="text-3xl font-bold">Last opp faktura</h2>
-      <p className="text-sm text-gray-500">
-        Last opp PDF eller bilde av faktura. Vi bruker Mindee til å lese
-        fakturaen, beregner CO₂ og lagrer den på Demo Org.
-      </p>
-
-      <div
-        className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-6 py-10 text-center"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          if (e.dataTransfer.files?.length) {
-            addFiles(e.dataTransfer.files);
-          }
-        }}
-      >
-        <p className="mb-2 font-semibold">Last opp fakturaer</p>
-        <p className="mb-4 text-sm text-gray-500">
-          Slipp filer her, eller klikk for å velge. Du kan laste opp mange
-          samtidig.
+    <div className="space-y-8">
+      <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+        <h1 className="text-2xl font-semibold text-slate-900 mb-2">
+          Last opp faktura
+        </h1>
+        <p className="text-sm text-slate-600 mb-6">
+          Velg en PDF eller et bilde av en faktura. Systemet bruker Azure
+          Document Intelligence til å lese fakturaen, beregner CO₂ og lagrer
+          den på din organisasjon.
         </p>
-        <label className="cursor-pointer rounded-full bg-green-700 px-4 py-2 text-sm font-medium text-white">
-          Velg filer
-          <input
-            type="file"
-            multiple
-            className="hidden"
-            accept="application/pdf,image/*"
-            onChange={(e) => {
-              if (e.target.files) addFiles(e.target.files);
-            }}
-          />
-        </label>
-      </div>
 
-      {items.length > 0 && (
-        <>
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold">Kø</h3>
-            <button
-              className="rounded-full bg-green-700 px-4 py-1 text-sm font-medium text-white disabled:opacity-50"
-              onClick={handleProcessAll}
-              disabled={processing}
-            >
-              {processing ? "Behandler…" : "Start behandling"}
-            </button>
+        <div className="rounded-xl border border-dashed border-emerald-300 bg-emerald-50/40 p-8">
+          <div
+            className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-slate-300 bg-white px-8 py-12 text-center"
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+          >
+            <p className="text-lg font-medium text-slate-900">
+              Last opp fakturaer
+            </p>
+            <p className="text-sm text-slate-500 max-w-xl">
+              Slipp filer her, eller klikk for å velge. Vi leser norsk og
+              engelsk automatisk med Azure OCR og lagrer resultatet.
+              <br />
+              Støtter PDF, PNG, JPG. Du kan velge mange samtidig.
+            </p>
+
+            <label className="mt-4 inline-flex cursor-pointer items-center rounded-full bg-emerald-600 px-6 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-700">
+              Velg filer
+              <input
+                type="file"
+                accept=".pdf,image/*"
+                multiple
+                className="hidden"
+                onChange={handleFileInputChange}
+              />
+            </label>
           </div>
 
-          <ul className="space-y-2">
+          <div className="mt-6 flex justify-end">
+            <button
+              type="button"
+              onClick={handleProcessAll}
+              disabled={
+                isProcessingAll || !items.some((i) => i.status === "pending")
+              }
+              className="inline-flex items-center rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white shadow disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isProcessingAll ? "Behandler..." : "Start behandling"}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900 mb-4">Kø</h2>
+
+        {items.length === 0 ? (
+          <p className="text-sm text-slate-500">
+            Ingen filer i køen ennå. Last opp fakturaer for å komme i gang.
+          </p>
+        ) : (
+          <ul className="space-y-3">
             {items.map((item) => (
               <li
                 key={item.id}
-                className="rounded-xl border bg-white px-3 py-2 text-sm"
+                className="flex flex-col gap-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
               >
-                <div className="flex justify-between">
-                  <span className="font-medium">{item.name}</span>
-                  <span
-                    className={
-                      item.status === "done"
-                        ? "text-green-700"
-                        : item.status === "error"
-                        ? "text-red-600"
-                        : "text-gray-500"
-                    }
-                  >
-                    {item.status}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-slate-900 truncate">
+                    {item.name}
+                  </span>
+                  <span className="text-xs font-semibold uppercase tracking-wide">
+                    {item.status === "pending" && (
+                      <span className="text-amber-700">klar</span>
+                    )}
+                    {item.status === "processing" && (
+                      <span className="text-sky-700">behandler…</span>
+                    )}
+                    {item.status === "done" && (
+                      <span className="text-emerald-700">ferdig</span>
+                    )}
+                    {item.status === "error" && (
+                      <span className="text-red-700">feil</span>
+                    )}
                   </span>
                 </div>
-                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
+
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
                   <div
-                    className="h-full rounded-full bg-green-600 transition-all"
-                    style={{ width: `${item.progress}%` }}
+                    className={`h-full transition-all ${
+                      item.status === "done"
+                        ? "w-full bg-emerald-500"
+                        : item.status === "processing"
+                        ? "w-1/2 bg-sky-400"
+                        : item.status === "error"
+                        ? "w-full bg-red-400"
+                        : "w-1/4 bg-slate-300"
+                    }`}
                   />
                 </div>
-                {item.message && (
-                  <p className="mt-1 text-xs text-gray-600">{item.message}</p>
-                )}
+
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                  <span>
+                    CO₂:{" "}
+                    {item.co2Kg != null
+                      ? `${item.co2Kg.toFixed(1)} kg`
+                      : "–"}
+                  </span>
+                  <span>
+                    Beløp:{" "}
+                    {item.amountNok != null
+                      ? `${item.amountNok.toLocaleString("nb-NO", {
+                          maximumFractionDigits: 2,
+                        })} NOK`
+                      : "–"}
+                  </span>
+                  {item.message && (
+                    <span className="text-slate-500">• {item.message}</span>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
-        </>
-      )}
+        )}
+      </section>
     </div>
   );
 }
