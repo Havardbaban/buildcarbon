@@ -7,11 +7,6 @@ import {
   categoryToScope,
   estimateEmissionsKg,
 } from "../lib/emissions";
-import { Client, InvoiceV4 } from "@mindee/client"; // <-- MINDΞEE SDK
-
-const mindeeClient = new Client({
-  apiKey: import.meta.env.VITE_MINDEE_API_KEY, // <-- must be set in Vercel
-});
 
 type FileStatus = "pending" | "processing" | "done" | "error";
 
@@ -24,6 +19,53 @@ type UploadItem = {
   message?: string;
 };
 
+const MINDEE_INVOICE_URL =
+  "https://api.mindee.net/v1/products/mindee/invoices/v4/predict";
+
+// --- Mindee call (REST API, no extra packages) --------------------
+
+async function parseWithMindee(file: File) {
+  const apiKey = import.meta.env.VITE_MINDEE_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "Missing VITE_MINDEE_API_KEY. Set it in Vercel environment variables."
+    );
+  }
+
+  const formData = new FormData();
+  formData.append("document", file);
+
+  const res = await fetch(MINDEE_INVOICE_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${apiKey}`,
+    },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Mindee error ${res.status}: ${text.slice(0, 200) || res.statusText}`
+    );
+  }
+
+  const json = await res.json();
+  return json;
+}
+
+// Helper to safely pull a single value from Mindee field { value: ... }
+function getFieldValue(field: any): any {
+  if (!field) return undefined;
+  if (typeof field.value !== "undefined") return field.value;
+  if (Array.isArray(field) && field[0] && typeof field[0].value !== "undefined") {
+    return field[0].value;
+  }
+  return undefined;
+}
+
+// -----------------------------------------------------------------
+
 export default function InvoiceUpload() {
   const [items, setItems] = useState<UploadItem[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -31,7 +73,9 @@ export default function InvoiceUpload() {
   function addFiles(files: FileList | File[]) {
     const arr = Array.from(files);
     const mapped: UploadItem[] = arr.map((file) => ({
-      id: `${file.name}-${Math.random().toString(36).slice(2)}`,
+      id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
+        .toString(36)
+        .slice(2)}`,
       file,
       name: file.name,
       status: "pending",
@@ -40,52 +84,64 @@ export default function InvoiceUpload() {
     setItems((prev) => [...prev, ...mapped]);
   }
 
-  async function processInvoice(item: UploadItem) {
+  async function processOne(item: UploadItem) {
+    setItems((prev) =>
+      prev.map((x) =>
+        x.id === item.id ? { ...x, status: "processing", progress: 10 } : x
+      )
+    );
+
     try {
-      setItems((prev) =>
-        prev.map((x) =>
-          x.id === item.id ? { ...x, status: "processing", progress: 10 } : x
-        )
-      );
+      // 1) Call Mindee
+      const mindeeJson = await parseWithMindee(item.file);
 
-      // --- 1) Send PDF to Mindee ---
-      const mindeeResponse = await mindeeClient.invoiceV4.parse(item.file);
+      const prediction =
+        mindeeJson?.document?.inference?.prediction ?? mindeeJson?.prediction ?? {};
 
-      const doc = mindeeResponse.document;
-      const invoice = doc.inference?.prediction;
+      const vendor =
+        getFieldValue(prediction.supplier_name) ||
+        getFieldValue(prediction.supplier) ||
+        "Unknown vendor";
 
-      if (!invoice) throw new Error("Mindee returned no invoice fields.");
+      const invoiceDate =
+        getFieldValue(prediction.date) || getFieldValue(prediction.invoice_date) || null;
 
-      const vendor = invoice.supplierName?.value ?? "Unknown vendor";
-      const date = invoice.date?.value ?? null;
-      const amount = invoice.totalAmount?.value ?? 0;
+      const amountRaw =
+        getFieldValue(prediction.total_amount) ||
+        getFieldValue(prediction.total_incl) ||
+        getFieldValue(prediction.total_excl) ||
+        0;
 
-      // --- 2) CO₂ logic ---
-      const category = inferCategory(vendor, JSON.stringify(invoice));
+      const amountNok = typeof amountRaw === "number" ? amountRaw : parseFloat(amountRaw) || 0;
+
+      // 2) CO2 calculation
+      const category = inferCategory(vendor, JSON.stringify(prediction));
       const scope = categoryToScope(category);
       const totalCo2Kg = estimateEmissionsKg({
-        amountNok: amount,
+        amountNok,
         category,
       });
 
-      // --- 3) Save to Supabase ---
+      // 3) Save to Supabase
       const { error } = await supabase.from("invoices").insert([
         {
           org_id: ACTIVE_ORG_ID,
           vendor,
-          invoice_date: date,
-          amount_nok: amount,
+          invoice_date: invoiceDate,
+          amount_nok: amountNok || null,
           category,
           scope,
-          total_co2_kg: totalCo2Kg,
+          total_co2_kg: totalCo2Kg || null,
           status: "parsed",
-          ocr_text: JSON.stringify(invoice), // store Mindee JSON
+          ocr_text: JSON.stringify(prediction),
         },
       ]);
 
-      if (error) throw error;
+      if (error) {
+        throw new Error(error.message ?? "Supabase insert error");
+      }
 
-      // --- 4) Update UI ---
+      // 4) Update UI
       setItems((prev) =>
         prev.map((x) =>
           x.id === item.id
@@ -93,13 +149,19 @@ export default function InvoiceUpload() {
                 ...x,
                 status: "done",
                 progress: 100,
-                message: `Saved • ${totalCo2Kg.toFixed(1)} kg CO₂`,
+                message: `Saved • ${amountNok.toFixed(
+                  2
+                )} NOK • ${totalCo2Kg.toFixed(1)} kg CO₂`,
               }
             : x
         )
       );
     } catch (err: any) {
-      console.error("UPLOAD ERROR:", err);
+      console.error("Invoice upload error:", err);
+      const msg =
+        typeof err === "string"
+          ? err
+          : err?.message || err?.error_description || JSON.stringify(err);
 
       setItems((prev) =>
         prev.map((x) =>
@@ -107,10 +169,7 @@ export default function InvoiceUpload() {
             ? {
                 ...x,
                 status: "error",
-                message:
-                  err?.message ??
-                  err?.error_description ??
-                  JSON.stringify(err),
+                message: msg,
               }
             : x
         )
@@ -118,11 +177,12 @@ export default function InvoiceUpload() {
     }
   }
 
-  async function processAll() {
+  async function handleProcessAll() {
     setProcessing(true);
     for (const item of items) {
       if (item.status === "pending" || item.status === "error") {
-        await processInvoice(item);
+        // eslint-disable-next-line no-await-in-loop
+        await processOne(item);
       }
     }
     setProcessing(false);
@@ -131,74 +191,86 @@ export default function InvoiceUpload() {
   return (
     <div className="space-y-4">
       <h1 className="text-3xl font-bold">Last opp faktura</h1>
+      <p className="text-sm text-gray-500">
+        Velg en PDF eller et bilde av en faktura. Vi bruker Mindee til å lese
+        fakturaen, beregner CO₂ og lagrer resultatet.
+      </p>
 
       <div
-        className="border border-dashed rounded-2xl bg-gray-50 p-10 text-center"
+        className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-6 py-10 text-center"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
-          if (e.dataTransfer.files) addFiles(e.dataTransfer.files);
+          if (e.dataTransfer.files?.length) {
+            addFiles(e.dataTransfer.files);
+          }
         }}
       >
-        <p className="font-semibold mb-2">Last opp fakturaer</p>
-        <p className="text-sm text-gray-500 mb-4">
-          Slipp filer her eller velg. Vi bruker Mindee til automatisk faktura-tolkning.
+        <p className="mb-2 font-semibold">Last opp fakturaer</p>
+        <p className="mb-4 text-sm text-gray-500">
+          Slipp filer her, eller klikk for å velge. Du kan laste opp flere
+          samtidig.
         </p>
-
-        <label className="bg-green-700 text-white px-4 py-2 rounded-full cursor-pointer">
+        <label className="cursor-pointer rounded-full bg-green-700 px-4 py-2 text-sm font-medium text-white">
           Velg filer
           <input
             type="file"
             multiple
             className="hidden"
             accept="application/pdf,image/*"
-            onChange={(e) => e.target.files && addFiles(e.target.files)}
+            onChange={(e) => {
+              if (e.target.files) addFiles(e.target.files);
+            }}
           />
         </label>
       </div>
 
-      <button
-        className="bg-green-700 text-white px-4 py-2 rounded-full disabled:opacity-50"
-        onClick={processAll}
-        disabled={processing}
-      >
-        {processing ? "Behandler…" : "Start behandling"}
-      </button>
-
-      <ul className="space-y-3">
-        {items.map((item) => (
-          <li
-            key={item.id}
-            className="border rounded-xl p-3 text-sm flex flex-col gap-1"
-          >
-            <div className="flex justify-between">
-              <span className="font-medium">{item.name}</span>
-              <span
-                className={
-                  item.status === "done"
-                    ? "text-green-700"
-                    : item.status === "error"
-                    ? "text-red-600"
-                    : "text-gray-500"
-                }
+      {items.length > 0 && (
+        <>
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">Kø</h2>
+            <button
+              className="rounded-full bg-green-700 px-4 py-1 text-sm font-medium text-white disabled:opacity-50"
+              onClick={handleProcessAll}
+              disabled={processing}
+            >
+              {processing ? "Behandler…" : "Start behandling"}
+            </button>
+          </div>
+          <ul className="space-y-2">
+            {items.map((item) => (
+              <li
+                key={item.id}
+                className="rounded-xl border bg-white px-3 py-2 text-sm"
               >
-                {item.status}
-              </span>
-            </div>
-
-            <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-green-600"
-                style={{ width: `${item.progress}%` }}
-              />
-            </div>
-
-            {item.message && (
-              <p className="text-xs text-gray-600">{item.message}</p>
-            )}
-          </li>
-        ))}
-      </ul>
+                <div className="flex justify-between">
+                  <span className="font-medium">{item.name}</span>
+                  <span
+                    className={
+                      item.status === "done"
+                        ? "text-green-700"
+                        : item.status === "error"
+                        ? "text-red-600"
+                        : "text-gray-500"
+                    }
+                  >
+                    {item.status}
+                  </span>
+                </div>
+                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
+                  <div
+                    className="h-full rounded-full bg-green-600 transition-all"
+                    style={{ width: `${item.progress}%` }}
+                  />
+                </div>
+                {item.message && (
+                  <p className="mt-1 text-xs text-gray-600">{item.message}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
