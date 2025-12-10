@@ -21,36 +21,73 @@ export async function analyzeInvoiceWithAzure(file: File): Promise<ParsedInvoice
     throw new Error("Azure OCR is not configured. Missing endpoint or key.");
   }
 
-  // remove trailing slashes
   const endpoint = AZURE_ENDPOINT.replace(/\/+$/, "");
 
-  // Official stable prebuilt-invoice endpoint
-  const analyzeUrl =
-    `${endpoint}/formrecognizer/documentModels/prebuilt-invoice:analyze?api-version=2023-07-31`;
-
-  // 1) Start analysis
-  const startRes = await fetch(analyzeUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": file.type || "application/pdf",
-      "Ocp-Apim-Subscription-Key": AZURE_KEY,
+  // We’ll try both styles: Foundry (/documentintelligence + api-key)
+  // and classic Form Recognizer (/formrecognizer + Ocp-Apim-Subscription-Key)
+  const candidates: {
+    description: string;
+    url: string;
+    headerName: string;
+  }[] = [
+    {
+      description: "Foundry /documentintelligence + api-key",
+      url:
+        `${endpoint}/documentintelligence/documentModels/` +
+        `prebuilt-invoice:analyze?api-version=2023-10-31-preview`,
+      headerName: "api-key",
     },
-    body: file,
-  });
+    {
+      description: "Form Recognizer /formrecognizer + Ocp-Apim-Subscription-Key",
+      url:
+        `${endpoint}/formrecognizer/documentModels/` +
+        `prebuilt-invoice:analyze?api-version=2023-07-31`,
+      headerName: "Ocp-Apim-Subscription-Key",
+    },
+  ];
 
-  if (!startRes.ok) {
+  let lastErrorText = "";
+  let operationLocation: string | null = null;
+
+  for (const candidate of candidates) {
+    const startRes = await fetch(candidate.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type || "application/pdf",
+        [candidate.headerName]: AZURE_KEY!,
+      },
+      body: file,
+    });
+
+    if (startRes.ok) {
+      operationLocation = startRes.headers.get("operation-location");
+      if (!operationLocation) {
+        lastErrorText =
+          `Azure (${candidate.description}) missing operation-location header`;
+        continue;
+      }
+      // Success – we found the working style, break out
+      break;
+    }
+
     const text = await startRes.text();
+    lastErrorText = `Azure (${candidate.description}) failed ` +
+      `(${startRes.status}): ${text}`;
+
+    // Only try next candidate on 401/404 – for other errors we bail out
+    if (startRes.status !== 401 && startRes.status !== 404) {
+      throw new Error(lastErrorText);
+    }
+  }
+
+  if (!operationLocation) {
     throw new Error(
-      `Azure analyze start failed (${startRes.status}): ${text}`
+      lastErrorText ||
+        "Azure analysis could not be started – tried both endpoint styles."
     );
   }
 
-  const operationLocation = startRes.headers.get("operation-location");
-  if (!operationLocation) {
-    throw new Error("Azure response missing operation-location header.");
-  }
-
-  // 2) Poll for result
+  // Poll for result
   const maxAttempts = 30;
   const delayMs = 2000;
   let resultJson: any | null = null;
@@ -59,7 +96,10 @@ export async function analyzeInvoiceWithAzure(file: File): Promise<ParsedInvoice
     await sleep(delayMs);
 
     const pollRes = await fetch(operationLocation, {
-      headers: { "Ocp-Apim-Subscription-Key": AZURE_KEY },
+      headers: {
+        "Ocp-Apim-Subscription-Key": AZURE_KEY!,
+        "api-key": AZURE_KEY!, // whichever is needed, one of them will work
+      },
     });
 
     if (!pollRes.ok) {
