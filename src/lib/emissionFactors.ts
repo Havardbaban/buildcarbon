@@ -1,4 +1,6 @@
-// src/lib/emissions.ts
+// src/lib/emissionFactors.ts
+
+// Basic types
 export type InvoiceCategory =
   | "energy"
   | "fuel"
@@ -15,12 +17,14 @@ export type EmissionInput = {
   category: InvoiceCategory;
 };
 
-const NOK_FALLBACK_FACTOR = 0.0002; // kg CO2e per NOK as generic fallback
+// Generic fallback factor (kg CO2e per NOK)
+const NOK_FALLBACK_FACTOR = 0.0002;
 
+// Category-specific emission factors (kg CO2e per NOK)
+// These are simplified and can be tuned later.
 const CATEGORY_FACTORS: Record<InvoiceCategory, number> = {
-  // very rough typical values – can be tuned later
-  energy: 0.00015,   // kg CO2e per NOK (electricity / heating)
-  fuel: 0.00035,     // kg CO2e per NOK (diesel / petrol)
+  energy: 0.00015,   // electricity / heating
+  fuel: 0.00035,     // diesel / petrol
   travel: 0.00030,   // flights, taxis, etc
   hotel: 0.00025,
   goods: 0.00020,
@@ -28,6 +32,7 @@ const CATEGORY_FACTORS: Record<InvoiceCategory, number> = {
   other: NOK_FALLBACK_FACTOR,
 };
 
+// Heuristic category detection from vendor name + OCR text
 export function inferCategory(vendor: string, text: string): InvoiceCategory {
   const haystack = `${vendor} ${text}`.toLowerCase();
 
@@ -53,6 +58,7 @@ export function inferCategory(vendor: string, text: string): InvoiceCategory {
   return "other";
 }
 
+// Map category to ESG scope
 export function categoryToScope(category: InvoiceCategory): EmissionScope {
   switch (category) {
     case "fuel":
@@ -64,6 +70,7 @@ export function categoryToScope(category: InvoiceCategory): EmissionScope {
   }
 }
 
+// Estimate emissions in kg CO2e from amount (NOK) + category
 export function estimateEmissionsKg(input: EmissionInput): number {
   const factor = CATEGORY_FACTORS[input.category] ?? NOK_FALLBACK_FACTOR;
   const result = input.amountNok * factor;
@@ -71,7 +78,7 @@ export function estimateEmissionsKg(input: EmissionInput): number {
   return Math.round(result * 10) / 10;
 }
 
-// Simple ESG E-score from 0–100 based on average kg CO2e per NOK
+// ESG E-score (0–100) based on CO2-intensity (kg/NOK)
 export function calculateEsgEScore(
   totalCo2Kg: number,
   totalSpendNok: number
@@ -80,11 +87,13 @@ export function calculateEsgEScore(
 
   const intensity = totalCo2Kg / totalSpendNok; // kg per NOK
 
-  // Very simple scale – tune later:
-  // <= 0.00015 kg/NOK ~ 100, >= 0.001 kg/NOK ~ 0
+  // Simple scale: <= 0.00015 kg/NOK ~ 100, >= 0.001 kg/NOK ~ 0
   const worst = 0.001;
   const best = 0.00015;
   const clamped = Math.min(Math.max(intensity, best), worst);
   const score = ((worst - clamped) / (worst - best)) * 100;
   return Math.round(score);
 }
+
+// Alias for older code that expects this name
+export const calculateESGScore = calculateEsgEScore;
