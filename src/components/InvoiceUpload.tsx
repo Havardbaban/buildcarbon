@@ -1,8 +1,10 @@
+// src/components/InvoiceUpload.tsx
+
 import React, { useState } from "react";
 import Tesseract from "tesseract.js";
 import { supabase } from "../lib/supabase";
 import { pdfToPngBlobs } from "../lib/pdfToImages";
-import { parseInvoiceLines } from "../lib/parseInvoiceLines";
+import parseInvoice, { toInvoiceDbRow } from "../lib/invoiceParser";
 import { ACTIVE_ORG_ID } from "../lib/org";
 
 type FileStatus = "pending" | "processing" | "done" | "error";
@@ -12,7 +14,7 @@ type UploadItem = {
   file: File;
   name: string;
   status: FileStatus;
-  progress: number; // 0–100 (per fil)
+  progress: number; // 0–100
   message?: string;
 };
 
@@ -48,7 +50,11 @@ export default function InvoiceUpload() {
   }
 
   async function processSingleItem(item: UploadItem) {
-    updateItem(item.id, { status: "processing", progress: 5, message: undefined });
+    updateItem(item.id, {
+      status: "processing",
+      progress: 5,
+      message: "Starter behandling…",
+    });
 
     try {
       const file = item.file;
@@ -73,19 +79,20 @@ export default function InvoiceUpload() {
       let fullText = "";
       const pagesCount = imageBlobs.length;
 
+      // 10–85%: OCR, siste 15% til lagring
       for (let i = 0; i < pagesCount; i++) {
         const blob = imageBlobs[i];
 
         const { data } = await Tesseract.recognize(blob, "nor+eng", {
           logger: (m) => {
-            // m.progress er 0–1 per side
             if (m.status === "recognizing text") {
-              const basePerPage = 70 / pagesCount; // 70% av progresjon allokeres til OCR
-              const pageProgress = m.progress * basePerPage;
-              const completedPagesProgress = (basePerPage * i);
-              const totalProgress = 10 + completedPagesProgress + pageProgress; // start på 10%
+              const ocrSpan = 75; // prosentpoeng reservert til OCR (10–85)
+              const basePerPage = ocrSpan / pagesCount;
+              const pageProgress = m.progress * basePerPage; // 0–basePerPage
+              const completedPagesProgress = basePerPage * i;
+              const totalProgress = 10 + completedPagesProgress + pageProgress;
               updateItem(item.id, {
-                progress: Math.min(95, Math.round(totalProgress)),
+                progress: Math.min(90, Math.round(totalProgress)),
               });
             }
           },
@@ -98,36 +105,43 @@ export default function InvoiceUpload() {
         throw new Error("Ingen tekst funnet i fakturaen.");
       }
 
-      // Parse fakturalinjer / metadata fra OCR-tekst
-      const parsed = parseInvoiceLines(fullText);
+      updateItem(item.id, {
+        message: "Tolker faktura…",
+        progress: 90,
+      });
 
-      // TODO: Tilpass dette til schemaet ditt
-      // Eksempel 1: Lagre rå-tekst + metadata i en "invoices_raw"-tabell
-      const { error: insertError } = await supabase
-        .from("invoices_raw")
-        .insert({
-          org_id: ACTIVE_ORG_ID,
-          file_name: file.name,
-          mime_type: file.type,
-          ocr_text: fullText,
-          parsed_json: parsed, // forutsatt at parseInvoiceLines gir et objekt
-        });
+      // 1) Parse hele fakturaen til struktur
+      const parsed = await parseInvoice(fullText);
 
-      if (insertError) {
-        console.error(insertError);
-        throw new Error(insertError.message || "Klarte ikke å lagre til Supabase.");
+      // 2) Lagre rå OCR + parsed_json til invoices_raw
+      const { error: rawError } = await supabase.from("invoices_raw").insert({
+        org_id: ACTIVE_ORG_ID,
+        file_name: file.name,
+        mime_type: file.type,
+        storage_path: null, // vi lagrer ikke til storage ennå
+        ocr_text: fullText,
+        parsed_json: parsed, // jsonb
+        status: "done",
+      });
+
+      if (rawError) {
+        console.error(rawError);
+        throw new Error(rawError.message || "Klarte ikke å lagre råfaktura.");
       }
 
-      // Alternativ: Hvis du allerede har tabell for fakturalinjer, kan du heller gjøre:
-      // const lines = parsed.lines; // avhengig av format
-      // await supabase.from("invoice_lines").insert(
-      //   lines.map((line) => ({
-      //     ...line,
-      //     org_id: ACTIVE_ORG_ID,
-      //     source_file_name: file.name,
-      //   }))
-      // );
+      // 3) Lag rad til hoved-tabellen `invoices` (for dashboardet)
+      const invoiceRow = toInvoiceDbRow(parsed, ACTIVE_ORG_ID);
 
+      const { error: invoiceError } = await supabase
+        .from("invoices")
+        .insert(invoiceRow);
+
+      if (invoiceError) {
+        console.error(invoiceError);
+        throw new Error(invoiceError.message || "Klarte ikke å lagre faktura.");
+      }
+
+      // 4) Oppdater UI-status
       updateItem(item.id, {
         status: "done",
         progress: 100,
@@ -138,7 +152,9 @@ export default function InvoiceUpload() {
       updateItem(item.id, {
         status: "error",
         progress: 100,
-        message: err?.message || "Noe gikk galt under behandling.",
+        message:
+          err?.message ||
+          "Noe gikk galt under behandling. Prøv igjen eller kontakt støtte.",
       });
     }
   }
@@ -181,14 +197,12 @@ export default function InvoiceUpload() {
           Last opp fakturaer
         </h2>
         <p className="mt-1 text-sm text-slate-500">
-          Dra inn eller velg flere PDF- eller bildefiler. Vi leser norsk og engelsk
-          med OCR og lagrer resultatet automatisk.
+          Dra inn eller velg flere PDF- eller bildefiler. Vi leser norsk og
+          engelsk med OCR og lagrer resultatet automatisk.
         </p>
 
         <div className="mt-4">
-          <label
-            className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 px-6 py-10 text-center transition hover:border-emerald-400 hover:bg-emerald-50/40"
-          >
+          <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 px-6 py-10 text-center transition hover:border-emerald-400 hover:bg-emerald-50/40">
             <span className="text-sm font-medium text-slate-800">
               Slipp filer her, eller klikk for å velge
             </span>
@@ -237,7 +251,8 @@ export default function InvoiceUpload() {
               )}
               {processingCount > 0 && (
                 <span>
-                  Pågår: <span className="font-medium">{processingCount}</span>
+                  Pågår:{" "}
+                  <span className="font-medium">{processingCount}</span>
                 </span>
               )}
             </div>
@@ -254,7 +269,7 @@ export default function InvoiceUpload() {
             </h3>
           </div>
 
-          <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+          <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
             {items.map((item) => (
               <div
                 key={item.id}
@@ -308,9 +323,7 @@ function StatusPill({ status }: { status: FileStatus }) {
     "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium";
   if (status === "pending") {
     return (
-      <span className={`${base} bg-slate-100 text-slate-600`}>
-        Venter
-      </span>
+      <span className={`${base} bg-slate-100 text-slate-600`}>Venter</span>
     );
   }
   if (status === "processing") {
@@ -328,8 +341,6 @@ function StatusPill({ status }: { status: FileStatus }) {
     );
   }
   return (
-    <span className={`${base} bg-rose-100 text-rose-700`}>
-      Feil
-    </span>
+    <span className={`${base} bg-rose-100 text-rose-700`}>Feil</span>
   );
 }
