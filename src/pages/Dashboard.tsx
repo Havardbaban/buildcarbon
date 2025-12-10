@@ -1,184 +1,474 @@
-// src/pages/Dashboard.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 
-type Row = {
-  id: string;
-  supplier_name: string | null;
-  issue_date: string | null;
-  total_amount: number | null;
-  co2_kg: number | null;
+type MonthlyData = {
+  month: string;
+  total_amount: number;
+  total_co2_kg: number;
+  invoice_count: number;
 };
 
-type Aggregates = {
-  invoiceCount: number;
-  totalAmount: number;
-  avgAmount: number;
-  totalCo2: number;
-  perSupplier: { supplier: string; co2: number; amount: number }[];
+type EmissionsData = {
+  month: string;
+  scope_name: string;
+  total_co2_kg: number;
+  total_cost: number;
 };
+
+type ESGMetrics = {
+  scope1_co2: number;
+  scope2_co2: number;
+  scope3_co2: number;
+  total_co2: number;
+  total_spend: number;
+  invoice_count: number;
+  co2_per_1000_nok: number;
+  esg_score: number;
+};
+
+type CostSaving = {
+  category: string;
+  esg_scope: number;
+  occurrence_count: number;
+  total_cost: number;
+  total_co2_kg: number;
+  recommendation: string;
+  potential_co2_reduction_kg: number;
+  potential_cost_savings_nok: number;
+};
+
+const SCOPE_COLORS = ["#ef4444", "#f59e0b", "#3b82f6"];
+const CHART_COLORS = ["#10b981", "#3b82f6", "#8b5cf6", "#f59e0b"];
 
 export default function DashboardPage() {
-  const [data, setData] = useState<Aggregates | null>(null);
+  const [monthlyData, setMonthlyData] = useState<MonthlyData[]>([]);
+  const [emissionsData, setEmissionsData] = useState<EmissionsData[]>([]);
+  const [esgMetrics, setESGMetrics] = useState<ESGMetrics | null>(null);
+  const [costSavings, setCostSavings] = useState<CostSaving[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  async function loadDashboardData() {
     try {
-      setError(null);
       setLoading(true);
 
-      const { data, error } = await supabase
-        .from("document")
-        .select("id, supplier_name, issue_date, total_amount, co2_kg");
+      const [monthlyRes, emissionsRes, esgRes, savingsRes] = await Promise.all([
+        supabase
+          .from("monthly_financials")
+          .select("month, total_amount, total_co2_kg, invoice_count")
+          .order("month", { ascending: true }),
+        supabase
+          .from("monthly_emissions")
+          .select("month, scope_name, total_co2_kg, total_cost")
+          .order("month", { ascending: true }),
+        supabase.from("esg_metrics").select("*").single(),
+        supabase
+          .from("cost_savings_opportunities")
+          .select("*")
+          .order("potential_co2_reduction_kg", { ascending: false })
+          .limit(5),
+      ]);
 
-      if (error) throw error;
-
-      const rows = (data ?? []) as Row[];
-      const invoiceCount = rows.length;
-      const totalAmount = rows.reduce(
-        (s, r) => s + (r.total_amount ?? 0),
-        0
-      );
-      const totalCo2 = rows.reduce((s, r) => s + (r.co2_kg ?? 0), 0);
-      const avgAmount =
-        invoiceCount > 0 ? totalAmount / invoiceCount : 0;
-
-      // Aggreger per leverandør
-      const map: Record<
-        string,
-        { supplier: string; co2: number; amount: number }
-      > = {};
-      for (const r of rows) {
-        const key = r.supplier_name ?? "Ukjent leverandør";
-        if (!map[key]) map[key] = { supplier: key, co2: 0, amount: 0 };
-        map[key].co2 += r.co2_kg ?? 0;
-        map[key].amount += r.total_amount ?? 0;
+      if (monthlyRes.data) {
+        const aggregated = aggregateMonthlyData(monthlyRes.data);
+        setMonthlyData(aggregated);
       }
-      const perSupplier = Object.values(map).sort(
-        (a, b) => b.co2 - a.co2
-      );
 
-      setData({
-        invoiceCount,
-        totalAmount,
-        avgAmount,
-        totalCo2,
-        perSupplier,
-      });
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Kunne ikke laste dashboard-data.");
+      if (emissionsRes.data) {
+        setEmissionsData(emissionsRes.data);
+      }
+
+      if (esgRes.data) {
+        setESGMetrics(esgRes.data);
+      }
+
+      if (savingsRes.data) {
+        setCostSavings(savingsRes.data);
+      }
+    } catch (err) {
+      console.error("Dashboard load error:", err);
     } finally {
       setLoading(false);
     }
   }
 
+  function aggregateMonthlyData(data: any[]): MonthlyData[] {
+    const map: Record<string, MonthlyData> = {};
+
+    data.forEach((row) => {
+      const month = row.month;
+      if (!map[month]) {
+        map[month] = {
+          month: new Date(month).toLocaleDateString("nb-NO", {
+            year: "numeric",
+            month: "short",
+          }),
+          total_amount: 0,
+          total_co2_kg: 0,
+          invoice_count: 0,
+        };
+      }
+
+      map[month].total_amount += Number(row.total_amount || 0);
+      map[month].total_co2_kg += Number(row.total_co2_kg || 0);
+      map[month].invoice_count = Math.max(
+        map[month].invoice_count,
+        Number(row.invoice_count || 0)
+      );
+    });
+
+    return Object.values(map);
+  }
+
   useEffect(() => {
-    load();
-    const handler = () => load();
-    window.addEventListener("invoice:updated", handler);
-    return () => window.removeEventListener("invoice:updated", handler);
+    loadDashboardData();
+
+    const channel = supabase
+      .channel("dashboard-updates")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "invoices" },
+        () => {
+          loadDashboardData();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "invoice_lines" },
+        () => {
+          loadDashboardData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-  if (loading) {
-    return <div className="text-sm text-slate-500">Laster dashboard...</div>;
+  if (loading && !esgMetrics) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-slate-500">Loading dashboard...</div>
+      </div>
+    );
   }
 
-  if (!data) {
-    return <div className="text-sm text-red-600">Ingen data.</div>;
-  }
-
-  const maxCo2 =
-    data.perSupplier.length > 0
-      ? Math.max(...data.perSupplier.map((x) => x.co2))
-      : 1;
+  const scopeData = esgMetrics
+    ? [
+        { name: "Scope 1: Direct", value: Number(esgMetrics.scope1_co2 || 0) },
+        { name: "Scope 2: Energy", value: Number(esgMetrics.scope2_co2 || 0) },
+        { name: "Scope 3: Value Chain", value: Number(esgMetrics.scope3_co2 || 0) },
+      ].filter((item) => item.value > 0)
+    : [];
 
   return (
-    <div className="space-y-6">
-      <header className="pb-2 border-b border-slate-200">
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-slate-600">
-          Oversikt over kostnader og utslipp basert på fakturaene.
+    <div className="space-y-6 pb-12">
+      <header className="border-b border-slate-200 pb-4">
+        <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
+        <p className="mt-1 text-slate-600">
+          Real-time financial and environmental insights
         </p>
       </header>
 
-      {/* KPI-kort */}
-      <section className="grid gap-4 md:grid-cols-4">
-        <KpiCard
-          label="Antall fakturaer"
-          value={data.invoiceCount.toLocaleString("nb-NO")}
-        />
-        <KpiCard
-          label="Totalt beløp (NOK)"
-          value={data.totalAmount.toLocaleString("nb-NO", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        />
-        <KpiCard
-          label="Snitt per faktura (NOK)"
-          value={data.avgAmount.toLocaleString("nb-NO", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        />
-        <KpiCard
-          label="Total CO₂ (kg)"
-          value={data.totalCo2.toLocaleString("nb-NO", {
-            minimumFractionDigits: 1,
-            maximumFractionDigits: 1,
-          })}
-        />
-      </section>
+      {esgMetrics && (
+        <div className="grid gap-4 md:grid-cols-4">
+          <KPICard
+            label="ESG Score"
+            value={Math.round(esgMetrics.esg_score)}
+            unit="/100"
+            color={getScoreColor(esgMetrics.esg_score)}
+            subtitle="Environmental Performance"
+          />
+          <KPICard
+            label="Total CO₂"
+            value={Math.round(esgMetrics.total_co2).toLocaleString("nb-NO")}
+            unit="kg"
+            subtitle="Last 30 days"
+          />
+          <KPICard
+            label="Total Spend"
+            value={Math.round(esgMetrics.total_spend).toLocaleString("nb-NO")}
+            unit="NOK"
+            subtitle="Last 30 days"
+          />
+          <KPICard
+            label="CO₂ Intensity"
+            value={esgMetrics.co2_per_1000_nok.toFixed(1)}
+            unit="kg/1000 NOK"
+            subtitle="Emissions per spending"
+          />
+        </div>
+      )}
 
-      {/* "Figur": leverandører med horisontale barer */}
-      <section className="border border-slate-200 rounded-xl bg-white shadow-sm p-4">
-        <h2 className="text-sm font-semibold mb-3">
-          Hotspots – leverandører med høyest utslipp
-        </h2>
-        <div className="space-y-2">
-          {data.perSupplier.slice(0, 8).map((s) => (
-            <div key={s.supplier}>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="font-medium">{s.supplier}</span>
-                <span>
-                  {s.co2.toLocaleString("nb-NO", {
-                    maximumFractionDigits: 1,
-                  })}{" "}
-                  kg CO₂
-                </span>
-              </div>
-              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-emerald-600"
-                  style={{
-                    width: `${(s.co2 / maxCo2) * 100 || 0}%`,
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-lg font-semibold text-slate-900">
+            Monthly Spending & Emissions
+          </h2>
+          {monthlyData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={monthlyData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="month" stroke="#64748b" style={{ fontSize: "12px" }} />
+                <YAxis yAxisId="left" stroke="#10b981" style={{ fontSize: "12px" }} />
+                <YAxis yAxisId="right" orientation="right" stroke="#3b82f6" style={{ fontSize: "12px" }} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "white",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "8px",
                   }}
                 />
-              </div>
-            </div>
-          ))}
-          {data.perSupplier.length === 0 && (
-            <div className="text-xs text-slate-400">
-              Ingen data ennå. Last opp en faktura.
+                <Legend />
+                <Line
+                  yAxisId="left"
+                  type="monotone"
+                  dataKey="total_amount"
+                  stroke="#10b981"
+                  strokeWidth={2}
+                  name="Spending (NOK)"
+                />
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="total_co2_kg"
+                  stroke="#3b82f6"
+                  strokeWidth={2}
+                  name="CO₂ (kg)"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-[300px] items-center justify-center text-slate-400">
+              No monthly data yet. Upload invoices to see trends.
             </div>
           )}
         </div>
-      </section>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-lg font-semibold text-slate-900">
+            Emissions by ESG Scope
+          </h2>
+          {scopeData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={scopeData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={(entry) => `${entry.name}: ${Math.round(entry.value)} kg`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {scopeData.map((_, index) => (
+                    <Cell key={`cell-${index}`} fill={SCOPE_COLORS[index % SCOPE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-[300px] items-center justify-center text-slate-400">
+              No emissions data yet. Upload invoices to track ESG scopes.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {costSavings.length > 0 && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Cost & Emission Savings Opportunities
+            </h2>
+            <button
+              onClick={() => downloadCarbonReport(esgMetrics, costSavings, monthlyData)}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+            >
+              Download Carbon Report
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {costSavings.map((saving, idx) => (
+              <div
+                key={idx}
+                className="rounded-xl border border-slate-100 bg-slate-50 p-4"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-slate-900">
+                        {formatCategory(saving.category)}
+                      </h3>
+                      <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium">
+                        Scope {saving.esg_scope}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {saving.recommendation}
+                    </p>
+                    <div className="mt-2 flex gap-4 text-xs text-slate-500">
+                      <span>
+                        Current: {Math.round(saving.total_co2_kg)} kg CO₂,{" "}
+                        {Math.round(saving.total_cost).toLocaleString("nb-NO")} NOK
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-semibold text-emerald-600">
+                      Save {Math.round(saving.potential_co2_reduction_kg)} kg CO₂
+                    </div>
+                    <div className="text-sm font-semibold text-blue-600">
+                      Save {Math.round(saving.potential_cost_savings_nok).toLocaleString("nb-NO")} NOK
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function KpiCard({ label, value }: { label: string; value: string }) {
+function KPICard({
+  label,
+  value,
+  unit,
+  subtitle,
+  color,
+}: {
+  label: string;
+  value: string | number;
+  unit?: string;
+  subtitle?: string;
+  color?: string;
+}) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-4">
-      <div className="text-xs uppercase tracking-wide text-slate-500">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
         {label}
       </div>
-      <div className="mt-2 text-2xl font-semibold text-slate-900">
-        {value}
+      <div className="mt-2 flex items-baseline gap-1">
+        <div className={`text-3xl font-bold ${color || "text-slate-900"}`}>
+          {value}
+        </div>
+        {unit && <div className="text-lg text-slate-500">{unit}</div>}
       </div>
+      {subtitle && <div className="mt-1 text-xs text-slate-500">{subtitle}</div>}
     </div>
   );
+}
+
+function getScoreColor(score: number): string {
+  if (score >= 80) return "text-emerald-600";
+  if (score >= 60) return "text-blue-600";
+  if (score >= 40) return "text-amber-600";
+  return "text-red-600";
+}
+
+function formatCategory(category: string): string {
+  const map: Record<string, string> = {
+    fuel_diesel: "Diesel Fuel",
+    fuel_petrol: "Petrol/Gasoline",
+    fuel_gas: "Natural Gas",
+    electricity: "Electricity",
+    heating: "District Heating",
+    cooling: "District Cooling",
+    travel_flight: "Air Travel",
+    travel_train: "Train Travel",
+    travel_taxi: "Taxi/Rideshare",
+    travel_hotel: "Hotel Accommodation",
+    waste: "Waste Disposal",
+    goods: "Purchased Goods",
+    electronics: "Electronics",
+    food: "Food & Catering",
+    transport: "Transportation & Logistics",
+  };
+  return map[category] || category;
+}
+
+function downloadCarbonReport(
+  esgMetrics: ESGMetrics | null,
+  costSavings: CostSaving[],
+  monthlyData: MonthlyData[]
+) {
+  const reportDate = new Date().toLocaleDateString("nb-NO");
+
+  let content = `CARBON EMISSIONS REPORT
+Generated: ${reportDate}
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+
+ESG Environmental Score: ${esgMetrics ? Math.round(esgMetrics.esg_score) : 0}/100
+Total CO₂ Emissions (30 days): ${esgMetrics ? Math.round(esgMetrics.total_co2).toLocaleString("nb-NO") : 0} kg
+Total Spending (30 days): ${esgMetrics ? Math.round(esgMetrics.total_spend).toLocaleString("nb-NO") : 0} NOK
+CO₂ Intensity: ${esgMetrics ? esgMetrics.co2_per_1000_nok.toFixed(2) : 0} kg CO₂ per 1000 NOK
+
+================================================================================
+EMISSIONS BY ESG SCOPE
+================================================================================
+
+Scope 1 (Direct Emissions): ${esgMetrics ? Math.round(esgMetrics.scope1_co2).toLocaleString("nb-NO") : 0} kg CO₂
+Scope 2 (Purchased Energy): ${esgMetrics ? Math.round(esgMetrics.scope2_co2).toLocaleString("nb-NO") : 0} kg CO₂
+Scope 3 (Value Chain): ${esgMetrics ? Math.round(esgMetrics.scope3_co2).toLocaleString("nb-NO") : 0} kg CO₂
+
+================================================================================
+MONTHLY TRENDS
+================================================================================
+
+${monthlyData
+  .map(
+    (m) =>
+      `${m.month}: ${Math.round(m.total_amount).toLocaleString("nb-NO")} NOK, ${Math.round(m.total_co2_kg).toLocaleString("nb-NO")} kg CO₂`
+  )
+  .join("\n")}
+
+================================================================================
+COST & EMISSION REDUCTION OPPORTUNITIES
+================================================================================
+
+${costSavings
+  .map(
+    (s, idx) =>
+      `${idx + 1}. ${formatCategory(s.category)} (Scope ${s.esg_scope})
+   Current: ${Math.round(s.total_co2_kg)} kg CO₂, ${Math.round(s.total_cost).toLocaleString("nb-NO")} NOK
+   Recommendation: ${s.recommendation}
+   Potential Savings: ${Math.round(s.potential_co2_reduction_kg)} kg CO₂, ${Math.round(s.potential_cost_savings_nok).toLocaleString("nb-NO")} NOK
+`
+  )
+  .join("\n")}
+
+================================================================================
+METHODOLOGY
+================================================================================
+
+This report uses the GHG Protocol Corporate Accounting and Reporting Standard
+for categorizing emissions into Scope 1, 2, and 3. Emission factors are based
+on industry-standard datasets and local grid intensities.
+
+ESG Score Calculation:
+- Based on CO₂ intensity (kg CO₂ per 1000 NOK spending)
+- Target benchmark: 50 kg CO₂ per 1000 NOK
+- Score ranges from 0 (poor) to 100 (excellent)
+
+Report generated by BuildCarbon Platform
+`;
+
+  const blob = new Blob([content], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `carbon-report-${new Date().toISOString().split("T")[0]}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

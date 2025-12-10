@@ -1,19 +1,20 @@
-// src/components/InvoiceTable.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-type DocumentRow = {
+type InvoiceRow = {
   id: string;
-  issue_date: string | null;
-  supplier_name: string | null;
-  total_amount: number | null;
+  invoice_date: string | null;
+  vendor: string | null;
+  invoice_no: string | null;
+  total: number | null;
   currency: string | null;
-  co2_kg: number | null;
-  file_path?: string | null;
+  total_co2_kg: number | null;
+  public_url: string | null;
+  status: string | null;
 };
 
 export default function InvoiceTable() {
-  const [rows, setRows] = useState<DocumentRow[]>([]);
+  const [rows, setRows] = useState<InvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,19 +24,19 @@ export default function InvoiceTable() {
       setLoading(true);
 
       const { data, error } = await supabase
-        .from("document")
+        .from("invoices")
         .select(
-          "id, issue_date, supplier_name, total_amount, currency, co2_kg, file_path"
+          "id, invoice_date, vendor, invoice_no, total, currency, total_co2_kg, public_url, status"
         )
-        .order("issue_date", { ascending: false })
+        .order("created_at", { ascending: false })
         .limit(200);
 
       if (error) throw error;
 
-      setRows((data ?? []) as DocumentRow[]);
+      setRows((data ?? []) as InvoiceRow[]);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Kunne ikke hente dokumenter.");
+      setError(err.message || "Could not fetch invoices.");
     } finally {
       setLoading(false);
     }
@@ -44,10 +45,20 @@ export default function InvoiceTable() {
   useEffect(() => {
     load();
 
-    const handler = () => load();
-    window.addEventListener("invoice:updated", handler);
+    const channel = supabase
+      .channel("invoices-table")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "invoices" },
+        () => {
+          load();
+        }
+      )
+      .subscribe();
 
-    return () => window.removeEventListener("invoice:updated", handler);
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   function formatNumber(n: number | null) {
@@ -73,43 +84,59 @@ export default function InvoiceTable() {
 
   return (
     <div className="space-y-2">
-      {loading && <div className="text-xs text-slate-500">Laster...</div>}
+      {loading && <div className="text-xs text-slate-500">Loading...</div>}
       {error && <div className="text-xs text-red-600">{error}</div>}
       <div className="overflow-x-auto">
-        <table className="min-w-full text-xs border border-slate-200">
-          <thead className="bg-slate-50 text-slate-600">
+        <table className="min-w-full text-sm border border-slate-200">
+          <thead className="bg-slate-50 text-slate-700">
             <tr>
-              <th className="px-2 py-1 text-left border-b">Dato</th>
-              <th className="px-2 py-1 text-left border-b">Leverandør</th>
-              <th className="px-2 py-1 text-right border-b">Beløp</th>
-              <th className="px-2 py-1 text-right border-b">CO₂ (kg)</th>
-              <th className="px-2 py-1 text-center border-b">Fil</th>
+              <th className="px-3 py-2 text-left border-b font-medium">Date</th>
+              <th className="px-3 py-2 text-left border-b font-medium">Vendor</th>
+              <th className="px-3 py-2 text-left border-b font-medium">Invoice #</th>
+              <th className="px-3 py-2 text-right border-b font-medium">Amount</th>
+              <th className="px-3 py-2 text-right border-b font-medium">CO₂ (kg)</th>
+              <th className="px-3 py-2 text-center border-b font-medium">Status</th>
+              <th className="px-3 py-2 text-center border-b font-medium">File</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-b last:border-0">
-                <td className="px-2 py-1">{formatDate(r.issue_date)}</td>
-                <td className="px-2 py-1">
-                  {r.supplier_name ?? "Ukjent leverandør"}
+              <tr key={r.id} className="border-b last:border-0 hover:bg-slate-50">
+                <td className="px-3 py-2">{formatDate(r.invoice_date)}</td>
+                <td className="px-3 py-2 font-medium">
+                  {r.vendor ?? "Unknown vendor"}
                 </td>
-                <td className="px-2 py-1 text-right">
-                  {r.total_amount != null
-                    ? `${formatNumber(r.total_amount)} ${r.currency ?? "NOK"}`
+                <td className="px-3 py-2 text-slate-600">
+                  {r.invoice_no ?? "-"}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {r.total != null
+                    ? `${formatNumber(r.total)} ${r.currency ?? "NOK"}`
                     : "-"}
                 </td>
-                <td className="px-2 py-1 text-right">
-                  {formatCo2(r.co2_kg)}
+                <td className="px-3 py-2 text-right font-medium text-emerald-700">
+                  {formatCo2(r.total_co2_kg)}
                 </td>
-                <td className="px-2 py-1 text-center">
-                  {r.file_path ? (
+                <td className="px-3 py-2 text-center">
+                  <span
+                    className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                      r.status === "parsed"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {r.status || "pending"}
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-center">
+                  {r.public_url ? (
                     <a
-                      href={r.file_path}
+                      href={r.public_url}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-emerald-600 hover:underline"
+                      className="text-blue-600 hover:underline text-sm"
                     >
-                      Åpne
+                      View
                     </a>
                   ) : (
                     "-"
@@ -120,10 +147,10 @@ export default function InvoiceTable() {
             {!loading && rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={5}
-                  className="px-2 py-4 text-center text-slate-400"
+                  colSpan={7}
+                  className="px-3 py-8 text-center text-slate-400"
                 >
-                  Ingen dokumenter ennå. Last opp en faktura.
+                  No invoices yet. Upload an invoice to get started.
                 </td>
               </tr>
             )}
