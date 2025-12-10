@@ -26,6 +26,20 @@ export type ParsedInvoice = {
   lines: ParsedInvoiceLine[];
 };
 
+/**
+ * Shape that matches the `public.invoices` table.
+ * (Adjust if you add more columns there.)
+ */
+export type InvoiceDbInsert = {
+  org_id: string | null;
+  status: string;              // e.g. 'parsed'
+  supplier: string | null;
+  invoice_no: string | null;
+  invoice_date: string | null; // ISO yyyy-mm-dd
+  total: number | null;
+  currency: string | null;     // e.g. 'NOK'
+};
+
 function toISODate(dmy: string | null): string | null {
   if (!dmy) return null;
   // dd.mm.yyyy or dd.mm.yy
@@ -342,4 +356,23 @@ export default async function parseInvoice(text: string): Promise<ParsedInvoice>
 
   out.lines = parsedLines;
   return out;
+}
+
+/**
+ * Map ParsedInvoice → shape that passer `public.invoices`.
+ * Bruk denne sammen med Supabase insert.
+ */
+export function toInvoiceDbRow(
+  parsed: ParsedInvoice,
+  orgId: string | null
+): InvoiceDbInsert {
+  return {
+    org_id: orgId,
+    status: "parsed",
+    supplier: parsed.vendor ?? null,
+    invoice_no: parsed.invoiceNumber ?? null,
+    invoice_date: parsed.dateISO ?? null,
+    total: parsed.total ?? null,
+    currency: parsed.currency ?? "NOK",
+  };
 }
