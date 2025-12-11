@@ -1,63 +1,57 @@
-// api/azure-ocr.ts
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import axios from 'axios';
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import axios from "axios";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  // We’ll declare url outside so we can log it in the catch block
+  let url = "";
 
   try {
-    const { fileBase64, contentType } = req.body as {
-      fileBase64?: string;
-      contentType?: string;
-    };
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    const { fileBase64 } = req.body as { fileBase64?: string };
 
     if (!fileBase64) {
-      return res.status(400).json({ error: 'Missing fileBase64 in body' });
+      return res.status(400).json({ error: "Missing fileBase64" });
     }
 
     const endpoint = process.env.VITE_AZURE_OCR_ENDPOINT;
-    const key = process.env.VITE_AZURE_OCR_KEY1 || process.env.VITE_AZURE_OCR_KEY2;
+    const key = process.env.VITE_AZURE_OCR_KEY1;
 
     if (!endpoint || !key) {
       return res.status(500).json({
-        error:
-          'Azure OCR endpoint or key not configured. Check Vercel env vars VITE_AZURE_OCR_ENDPOINT and VITE_AZURE_OCR_KEY1/2.',
+        error: "Azure OCR is not configured. Check VITE_AZURE_OCR_ENDPOINT and VITE_AZURE_OCR_KEY1 in Vercel.",
       });
     }
 
-    // Remove trailing slash if present so we don't end up with "//formrecognizer..."
-    const normalizedEndpoint = endpoint.replace(/\/+$/, '');
+    // Use the GA Document Intelligence / Form Recognizer invoice endpoint
+    // This is the same family of API used in the Azure "Live test" screen you showed.
+    url = `${endpoint.replace(/\/+$/, "")}/formrecognizer/documentModels/prebuilt-invoice:analyze?api-version=2023-07-31`;
 
-    // Azure Document Intelligence / Form Recognizer prebuilt invoice model
-    const url =
-      `${normalizedEndpoint}` +
-      `/formrecognizer/documentModels/prebuilt-invoice:analyze?api-version=2023-07-31`;
+    const buffer = Buffer.from(fileBase64, "base64");
 
-    // Azure expects raw bytes, not base64 string
-    const buffer = Buffer.from(fileBase64, 'base64');
-
-    const azureResponse = await axios.post(url, buffer, {
+    const response = await axios.post(url, buffer, {
       headers: {
-        'Content-Type': contentType || 'application/pdf',
-        'Ocp-Apim-Subscription-Key': key,
+        "Content-Type": "application/pdf",
+        "Ocp-Apim-Subscription-Key": key,
       },
     });
 
-    // Pass through Azure DI response to the caller
-    return res.status(200).json(azureResponse.data);
+    // For 2023-07-31, some endpoints return 202 + Operation-Location.
+    // If that happens we just pass the raw response back so we can see it.
+    return res.status(response.status).json(response.data ?? null);
   } catch (err: any) {
-    const status = err?.response?.status;
-    const data = err?.response?.data;
+    // Extra logging so we see the REAL Azure message in Vercel logs
+    console.error("Azure OCR Error details:", {
+      url,
+      message: err?.message,
+      status: err?.response?.status,
+      data: err?.response?.data,
+    });
 
-    console.error('Azure Document Intelligence error:', status, data || err.message);
-
-    return res.status(status || 500).json({
-      error: 'Azure Document Intelligence call failed',
-      status,
-      details: data || err.message,
+    return res.status(500).json({
+      error: err?.response?.data || err?.message || "Unknown Azure OCR error",
     });
   }
 }
