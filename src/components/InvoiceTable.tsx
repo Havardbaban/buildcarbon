@@ -28,14 +28,11 @@ export default function InvoiceTable() {
     setError(null);
 
     try {
-      console.log("[InvoiceTable] load invoices for org", ACTIVE_ORG_ID);
-
       const { data, error } = await supabase
         .from("invoices")
         .select(
           "id, invoice_date, vendor, invoice_no, total, currency, total_co2_kg, public_url, status"
         )
-        // vi filtrerer fortsatt på org_id når vi viser
         .eq("org_id", ACTIVE_ORG_ID)
         .order("created_at", { ascending: false })
         .limit(200);
@@ -49,7 +46,7 @@ export default function InvoiceTable() {
 
       setRows((data ?? []) as InvoiceRow[]);
     } catch (err: any) {
-      console.error("[InvoiceTable] unknown load error", err);
+      console.error("[InvoiceTable] load unknown error", err);
       setError("Ukjent feil ved henting av fakturaer.");
       setRows([]);
     } finally {
@@ -70,13 +67,10 @@ export default function InvoiceTable() {
     setError(null);
 
     try {
-      console.log("[InvoiceTable] delete one id", id);
-
       const { error } = await supabase
         .from("invoices")
         .delete()
-        // viktig: kun id, ingen org-filter → sletter alltid riktig rad
-        .eq("id", id);
+        .eq("id", id); // én faktura – id er alltid unik
 
       if (error) {
         console.error("[InvoiceTable] delete one error", error);
@@ -84,10 +78,9 @@ export default function InvoiceTable() {
         alert("Kunne ikke slette faktura: " + error.message);
       }
 
-      // hent fasit fra databasen
       await load();
     } catch (err: any) {
-      console.error("[InvoiceTable] unknown delete one error", err);
+      console.error("[InvoiceTable] delete one unknown error", err);
       setError("Ukjent feil ved sletting av faktura.");
       alert("Ukjent feil ved sletting av faktura.");
     } finally {
@@ -98,7 +91,7 @@ export default function InvoiceTable() {
   async function handleDeleteAll() {
     if (
       !window.confirm(
-        "Er du sikker på at du vil slette ALLE fakturaer? Dette kan ikke angres."
+        "Er du sikker på at du vil slette ALLE fakturaer for denne organisasjonen? Dette kan ikke angres."
       )
     ) {
       return;
@@ -108,13 +101,10 @@ export default function InvoiceTable() {
     setError(null);
 
     try {
-      console.log("[InvoiceTable] DELETE * FROM invoices");
-
       const { error } = await supabase
         .from("invoices")
         .delete()
-        // for pilot: slett absolutt alle rader i invoices
-        .not("id", "is", null);
+        .eq("org_id", ACTIVE_ORG_ID); // alle fakturaer for denne org
 
       if (error) {
         console.error("[InvoiceTable] delete all error", error);
@@ -122,10 +112,9 @@ export default function InvoiceTable() {
         alert("Kunne ikke slette alle fakturaer: " + error.message);
       }
 
-      // hent fasit (skal være tomt hvis sletting funket)
       await load();
     } catch (err: any) {
-      console.error("[InvoiceTable] unknown delete all error", err);
+      console.error("[InvoiceTable] delete all unknown error", err);
       setError("Ukjent feil ved sletting av alle fakturaer.");
       alert("Ukjent feil ved sletting av alle fakturaer.");
     } finally {
