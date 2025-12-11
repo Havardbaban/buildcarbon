@@ -1,83 +1,83 @@
 // src/lib/externalOcr.ts
-//
-// Kaller OCR.Space for å hente tekst,
-// og bruker så invoiceParser til å lage et ParsedInvoice-objekt.
+/**
+ * Runs OCR by calling our serverless API route /api/azure-ocr,
+ * which talks to Azure Document Intelligence.
+ */
 
-import parseInvoice, { ParsedInvoice } from "./invoiceParser";
+export type ExternalOcrSuccess = {
+  ok: true;
+  provider: 'azure-document-intelligence';
+  raw: any;        // full Azure response
+};
 
-const OCR_SPACE_ENDPOINT = "https://api.ocr.space/parse/image";
+export type ExternalOcrError = {
+  ok: false;
+  provider: 'azure-document-intelligence';
+  message: string;
+  status?: number;
+  details?: any;
+};
 
-export async function runExternalOcr(
-  file: File,
-  onStatus?: (msg: string) => void
-): Promise<ParsedInvoice> {
-  const apiKey = import.meta.env.VITE_OCR_SPACE_API_KEY as
-    | string
-    | undefined;
+export type ExternalOcrResult = ExternalOcrSuccess | ExternalOcrError;
 
-  if (!apiKey) {
-    throw new Error(
-      "Mangler VITE_OCR_SPACE_API_KEY. Legg den inn i .env og i Vercel Environment."
-    );
+/**
+ * file: the original invoice File (PDF / image)
+ */
+export async function runExternalOcr(file: File): Promise<ExternalOcrResult> {
+  try {
+    // Read file as base64 in the browser
+    const fileBase64 = await fileToBase64(file);
+
+    const resp = await fetch('/api/azure-ocr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileBase64,
+        contentType: file.type || 'application/pdf',
+      }),
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      return {
+        ok: false,
+        provider: 'azure-document-intelligence',
+        message:
+          `Azure Document Intelligence failed (${resp.status}).` +
+          (data?.error ? ` ${data.error}` : ''),
+        status: resp.status,
+        details: data,
+      };
+    }
+
+    return {
+      ok: true,
+      provider: 'azure-document-intelligence',
+      raw: data,
+    };
+  } catch (err: any) {
+    console.error('runExternalOcr error', err);
+
+    return {
+      ok: false,
+      provider: 'azure-document-intelligence',
+      message: 'Unknown Azure Document Intelligence error',
+      details: err?.message || err,
+    };
   }
+}
 
-  onStatus?.("Sender faktura til OCR-tjeneste...");
-
-  const formData = new FormData();
-  formData.append("file", file);
-
-  // Ingen language-parameter (ga E201-feil før)
-  // OCR.Space velger språk automatisk.
-
-  formData.append("isTable", "true");
-  formData.append("scale", "true");
-  formData.append("OCREngine", "2");
-
-  const res = await fetch(OCR_SPACE_ENDPOINT, {
-    method: "POST",
-    headers: {
-      apikey: apiKey,
-    },
-    body: formData,
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // Data URL looks like "data:application/pdf;base64,AAAA..."
+      const base64 = result.split(',')[1] || '';
+      resolve(base64);
+    };
+    reader.onerror = (e) => reject(e);
+    reader.readAsDataURL(file);
   });
-
-  if (!res.ok) {
-    throw new Error(`OCR-tjeneste svarte med HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
-
-  if (data.IsErroredOnProcessing) {
-    const msg =
-      (Array.isArray(data.ErrorMessage)
-        ? data.ErrorMessage.join(" | ")
-        : data.ErrorMessage) ||
-      data.ErrorDetails ||
-      "Ukjent feil";
-
-    throw new Error(`OCR-tjeneste-feil: ${msg}`);
-  }
-
-  const parsedResults = data.ParsedResults;
-  if (!parsedResults || !Array.isArray(parsedResults) || parsedResults.length === 0) {
-    throw new Error("OCR-tjeneste returnerte ingen tekst");
-  }
-
-  // Slå sammen tekst fra alle sider
-  const fullText = parsedResults
-    .map((r: any) =>
-      r && typeof r.ParsedText === "string" ? r.ParsedText : ""
-    )
-    .join("\n\n")
-    .trim();
-
-  // Bruk vår egen parser til å lage strukturert data
-  const parsed: ParsedInvoice = await parseInvoice(fullText);
-
-  // Garanti: lines er alltid en array
-  if (!Array.isArray(parsed.lines)) {
-    parsed.lines = [];
-  }
-
-  return parsed;
 }
