@@ -1,3 +1,4 @@
+// src/components/InvoiceTable.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
@@ -17,146 +18,182 @@ export default function InvoiceTable() {
   const [rows, setRows] = useState<InvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  async function load() {
+  // ---------------------------------------------------------------------------
+  // Hent fakturaer
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    async function load() {
+      try {
+        setError(null);
+        setLoading(true);
+
+        const { data, error } = await supabase
+          .from("invoices")
+          .select(
+            "id, invoice_date, vendor, invoice_no, total, currency, total_co2_kg, public_url, status"
+          )
+          .order("created_at", { ascending: false })
+          .limit(200);
+
+        if (error) throw error;
+        setRows((data ?? []) as InvoiceRow[]);
+      } catch (err: any) {
+        console.error(err);
+        setError(err.message || "Kunne ikke hente fakturaer.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    load();
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Slett faktura
+  // ---------------------------------------------------------------------------
+  async function handleDelete(row: InvoiceRow) {
+    const confirmed = window.confirm(
+      `Vil du slette faktura "${row.invoice_no ?? row.id}"?`
+    );
+    if (!confirmed) return;
+
     try {
+      setDeletingId(row.id);
       setError(null);
-      setLoading(true);
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from("invoices")
-        .select(
-          "id, invoice_date, vendor, invoice_no, total, currency, total_co2_kg, public_url, status"
-        )
-        .order("created_at", { ascending: false })
-        .limit(200);
+        .delete()
+        .eq("id", row.id);
 
       if (error) throw error;
 
-      setRows((data ?? []) as InvoiceRow[]);
+      // Fjern fra lokal state
+      setRows(prev => prev.filter(r => r.id !== row.id));
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Could not fetch invoices.");
+      setError(err.message || "Kunne ikke slette faktura.");
     } finally {
-      setLoading(false);
+      setDeletingId(null);
     }
   }
 
-  useEffect(() => {
-    load();
-
-    const channel = supabase
-      .channel("invoices-table")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "invoices" },
-        () => {
-          load();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  function formatNumber(n: number | null) {
-    if (n == null) return "-";
-    return n.toLocaleString("nb-NO", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-  }
-
-  function formatCo2(n: number | null) {
-    if (n == null) return "-";
-    return n.toLocaleString("nb-NO", {
-      minimumFractionDigits: 1,
-      maximumFractionDigits: 1,
-    });
-  }
-
-  function formatDate(d: string | null) {
-    if (!d) return "-";
-    return new Date(d).toLocaleDateString("nb-NO");
-  }
-
+  // ---------------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------------
   return (
-    <div className="space-y-2">
-      {loading && <div className="text-xs text-slate-500">Loading...</div>}
-      {error && <div className="text-xs text-red-600">{error}</div>}
+    <section className="rounded-xl border border-slate-200 bg-white">
+      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+        <div>
+          <h2 className="text-sm font-medium text-slate-900">Dokumenter</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Alle faktura-dokumenter som brukes i beregningene.
+          </p>
+        </div>
+        {loading && (
+          <p className="text-xs text-slate-400">Laster fakturaer …</p>
+        )}
+      </div>
+
+      {error && (
+        <div className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+          {error}
+        </div>
+      )}
+
       <div className="overflow-x-auto">
-        <table className="min-w-full text-sm border border-slate-200">
-          <thead className="bg-slate-50 text-slate-700">
+        <table className="min-w-full divide-y divide-slate-100 text-sm">
+          <thead className="bg-slate-50">
             <tr>
-              <th className="px-3 py-2 text-left border-b font-medium">Date</th>
-              <th className="px-3 py-2 text-left border-b font-medium">Vendor</th>
-              <th className="px-3 py-2 text-left border-b font-medium">Invoice #</th>
-              <th className="px-3 py-2 text-right border-b font-medium">Amount</th>
-              <th className="px-3 py-2 text-right border-b font-medium">CO₂ (kg)</th>
-              <th className="px-3 py-2 text-center border-b font-medium">Status</th>
-              <th className="px-3 py-2 text-center border-b font-medium">File</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Dato
+              </th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Leverandør
+              </th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Faktura #
+              </th>
+              <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Beløp
+              </th>
+              <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                CO₂ (kg)
+              </th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Status
+              </th>
+              <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Handling
+              </th>
             </tr>
           </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-b last:border-0 hover:bg-slate-50">
-                <td className="px-3 py-2">{formatDate(r.invoice_date)}</td>
-                <td className="px-3 py-2 font-medium">
-                  {r.vendor ?? "Unknown vendor"}
-                </td>
-                <td className="px-3 py-2 text-slate-600">
-                  {r.invoice_no ?? "-"}
-                </td>
-                <td className="px-3 py-2 text-right">
-                  {r.total != null
-                    ? `${formatNumber(r.total)} ${r.currency ?? "NOK"}`
-                    : "-"}
-                </td>
-                <td className="px-3 py-2 text-right font-medium text-emerald-700">
-                  {formatCo2(r.total_co2_kg)}
-                </td>
-                <td className="px-3 py-2 text-center">
-                  <span
-                    className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                      r.status === "parsed"
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-slate-100 text-slate-600"
-                    }`}
-                  >
-                    {r.status || "pending"}
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-center">
-                  {r.public_url ? (
-                    <a
-                      href={r.public_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-blue-600 hover:underline text-sm"
-                    >
-                      View
-                    </a>
-                  ) : (
-                    "-"
-                  )}
-                </td>
-              </tr>
-            ))}
-            {!loading && rows.length === 0 && (
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {rows.length === 0 && !loading && (
               <tr>
                 <td
                   colSpan={7}
-                  className="px-3 py-8 text-center text-slate-400"
+                  className="px-4 py-4 text-center text-sm text-slate-500"
                 >
-                  No invoices yet. Upload an invoice to get started.
+                  Ingen fakturaer ennå. Last opp en faktura for å starte.
                 </td>
               </tr>
             )}
+
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td className="px-4 py-2 text-sm text-slate-700">
+                  {row.invoice_date
+                    ? new Date(row.invoice_date).toLocaleDateString("nb-NO")
+                    : "–"}
+                </td>
+                <td className="px-4 py-2 text-sm text-slate-700">
+                  {row.vendor || "Ukjent"}
+                </td>
+                <td className="px-4 py-2 text-sm text-slate-700">
+                  {row.invoice_no || "–"}
+                </td>
+                <td className="px-4 py-2 text-right text-sm text-slate-700">
+                  {row.total != null
+                    ? `${row.total.toLocaleString("nb-NO", {
+                        maximumFractionDigits: 0,
+                      })} ${row.currency ?? "NOK"}`
+                    : "–"}
+                </td>
+                <td className="px-4 py-2 text-right text-sm text-slate-700">
+                  {row.total_co2_kg != null
+                    ? row.total_co2_kg.toFixed(1)
+                    : "–"}
+                </td>
+                <td className="px-4 py-2 text-sm text-slate-700">
+                  {row.status || "parsed"}
+                </td>
+                <td className="px-4 py-2 text-right text-sm text-slate-700 space-x-2">
+                  {row.public_url && (
+                    <a
+                      href={row.public_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-medium text-emerald-700 hover:underline"
+                    >
+                      Åpne
+                    </a>
+                  )}
+                  <button
+                    onClick={() => handleDelete(row)}
+                    disabled={deletingId === row.id}
+                    className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+                  >
+                    {deletingId === row.id ? "Sletter…" : "Slett"}
+                  </button>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   );
 }
