@@ -70,7 +70,7 @@ export default function InvoiceTable() {
       const { error } = await supabase
         .from("invoices")
         .delete()
-        .eq("id", id); // én faktura – id er alltid unik
+        .eq("id", id); // invoice_lines slettes automatisk pga ON DELETE CASCADE
 
       if (error) {
         console.error("[InvoiceTable] delete one error", error);
@@ -104,7 +104,7 @@ export default function InvoiceTable() {
       const { error } = await supabase
         .from("invoices")
         .delete()
-        .eq("org_id", ACTIVE_ORG_ID); // alle fakturaer for denne org
+        .eq("org_id", ACTIVE_ORG_ID); // alle fakturaer – lines følger etter pga CASCADE
 
       if (error) {
         console.error("[InvoiceTable] delete all error", error);
