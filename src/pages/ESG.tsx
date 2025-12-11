@@ -13,7 +13,7 @@ type InvoiceRow = {
   id: string;
   invoice_date: string;
   vendor: string | null;
-  total: number | null;
+  total: number | null;         // NOK-beløp (din kolonne)
   total_co2_kg: number | null;
   scope: string | null;
 };
@@ -24,38 +24,71 @@ export default function ESGPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let isMounted = true;
+
     async function load() {
+      if (!isMounted) return;
+
       setLoading(true);
       setError(null);
 
       try {
         const { data, error } = await supabase
           .from("invoices")
-          .select(
-            "id, invoice_date, vendor, total, total_co2_kg, scope"
-          )
+          .select("id, invoice_date, vendor, total, total_co2_kg, scope")
           .eq("org_id", ACTIVE_ORG_ID)
           .order("invoice_date", { ascending: false })
           .limit(500);
 
         if (error) {
           console.error(error);
+          if (!isMounted) return;
           setError("Kunne ikke hente fakturaer.");
           setRows([]);
           return;
         }
 
+        if (!isMounted) return;
         setRows((data ?? []) as InvoiceRow[]);
       } catch (err: any) {
         console.error(err);
+        if (!isMounted) return;
         setError("Ukjent feil ved henting av faktura-data.");
         setRows([]);
       } finally {
+        if (!isMounted) return;
         setLoading(false);
       }
     }
 
+    // 1) Først: initial load
     load();
+
+    // 2) Så: abonnér på endringer i invoices for aktiv org (INSERT/UPDATE/DELETE)
+    const channel = supabase
+      .channel(`invoices-realtime-esg-${ACTIVE_ORG_ID}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "invoices",
+          filter: `org_id=eq.${ACTIVE_ORG_ID}`,
+        },
+        () => {
+          // Når noe endres (inkl. "slett alle") → hent data på nytt
+          load();
+        }
+      )
+      .subscribe((status) => {
+        console.log("ESG realtime status:", status);
+      });
+
+    return () => {
+      // Cleanup når komponenten unmountes
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const finance: FinanceMetrics = useMemo(
