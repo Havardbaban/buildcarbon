@@ -32,18 +32,21 @@ export default function DashboardPage() {
   const [monthly, setMonthly] = useState<MonthlyPoint[]>([]);
 
   useEffect(() => {
+    let isMounted = true;
+
     async function load() {
+      if (!isMounted) return;
+
       setLoading(true);
       const { data, error } = await supabase
         .from("invoices")
-        .select(
-          "id, org_id, invoice_date, amount_nok, total_co2_kg"
-        )
+        .select("id, org_id, invoice_date, amount_nok, total_co2_kg")
         .eq("org_id", ACTIVE_ORG_ID)
         .not("invoice_date", "is", null);
 
       if (error) {
         console.error(error);
+        if (!isMounted) return;
         setLoading(false);
         return;
       }
@@ -73,11 +76,38 @@ export default function DashboardPage() {
           co2: Math.round(v.co2 * 10) / 10,
         }));
 
+      if (!isMounted) return;
       setMonthly(points);
       setLoading(false);
     }
 
+    // Initial load
     load();
+
+    // Realtime subscription – oppdater månedsgrafen ved INSERT/UPDATE/DELETE
+    const channel = supabase
+      .channel(`invoices-realtime-dashboard-monthly-${ACTIVE_ORG_ID}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "invoices",
+          filter: `org_id=eq.${ACTIVE_ORG_ID}`,
+        },
+        () => {
+          // Når noe skjer med invoices → bygg monthly-data på nytt
+          load();
+        }
+      )
+      .subscribe((status) => {
+        console.log("Dashboard monthly realtime status:", status);
+      });
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const hasData = monthly.length > 0;
@@ -139,7 +169,11 @@ function ScopeSummary() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
+
     async function load() {
+      if (!isMounted) return;
+
       setLoading(true);
       const oneYearAgo = new Date();
       oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
@@ -152,6 +186,7 @@ function ScopeSummary() {
 
       if (error) {
         console.error(error);
+        if (!isMounted) return;
         setLoading(false);
         return;
       }
@@ -159,10 +194,10 @@ function ScopeSummary() {
       const map = new Map<string, { co2: number; spend: number }>();
 
       for (const row of data ?? []) {
-        const scope = row.scope ?? "Unknown";
+        const scope = (row as any).scope ?? "Unknown";
         const entry = map.get(scope) ?? { co2: 0, spend: 0 };
-        entry.co2 += row.total_co2_kg ?? 0;
-        entry.spend += row.amount_nok ?? 0;
+        entry.co2 += (row as any).total_co2_kg ?? 0;
+        entry.spend += (row as any).amount_nok ?? 0;
         map.set(scope, entry);
       }
 
@@ -172,11 +207,38 @@ function ScopeSummary() {
         spend: Math.round(v.spend || 0),
       }));
 
+      if (!isMounted) return;
       setData(result);
       setLoading(false);
     }
 
+    // Initial load
     load();
+
+    // Realtime subscription – oppdater scope-sammendraget også
+    const channel = supabase
+      .channel(`invoices-realtime-dashboard-scope-${ACTIVE_ORG_ID}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "invoices",
+          filter: `org_id=eq.${ACTIVE_ORG_ID}`,
+        },
+        () => {
+          // Alle endringer i invoices siste 12 mnd → beregn på nytt
+          load();
+        }
+      )
+      .subscribe((status) => {
+        console.log("Dashboard scope realtime status:", status);
+      });
+
+  return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   if (loading) return <p className="text-sm text-gray-400">Loading…</p>;
