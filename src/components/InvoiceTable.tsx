@@ -23,18 +23,19 @@ export default function InvoiceTable() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
 
-  async function load(source: "initial" | "manual" | "realtime" = "manual") {
+  async function load() {
     setLoading(true);
     setError(null);
 
     try {
-      console.log("[InvoiceTable] load()", source);
+      console.log("[InvoiceTable] load invoices for org", ACTIVE_ORG_ID);
 
       const { data, error } = await supabase
         .from("invoices")
         .select(
           "id, invoice_date, vendor, invoice_no, total, currency, total_co2_kg, public_url, status"
         )
+        // vi filtrerer fortsatt på org_id når vi viser
         .eq("org_id", ACTIVE_ORG_ID)
         .order("created_at", { ascending: false })
         .limit(200);
@@ -57,44 +58,7 @@ export default function InvoiceTable() {
   }
 
   useEffect(() => {
-    let isMounted = true;
-
-    // initial load
-    load("initial");
-
-    // realtime – hvis noe skjer i invoices, henter vi på nytt
-    const channel = supabase
-      .channel("invoices-table")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "invoices",
-        },
-        (payload) => {
-          const orgId =
-            (payload.new as any)?.org_id ?? (payload.old as any)?.org_id;
-
-          if (orgId === ACTIVE_ORG_ID) {
-            console.log(
-              "[InvoiceTable] realtime event",
-              payload.eventType,
-              "for org",
-              orgId
-            );
-            if (isMounted) {
-              load("realtime");
-            }
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      isMounted = false;
-      supabase.removeChannel(channel);
-    };
+    load();
   }, []);
 
   async function handleDelete(id: string) {
@@ -106,13 +70,13 @@ export default function InvoiceTable() {
     setError(null);
 
     try {
-      console.log("[InvoiceTable] delete one", id);
+      console.log("[InvoiceTable] delete one id", id);
 
       const { error } = await supabase
         .from("invoices")
         .delete()
-        .eq("id", id)
-        .eq("org_id", ACTIVE_ORG_ID);
+        // viktig: kun id, ingen org-filter → sletter alltid riktig rad
+        .eq("id", id);
 
       if (error) {
         console.error("[InvoiceTable] delete one error", error);
@@ -120,8 +84,8 @@ export default function InvoiceTable() {
         alert("Kunne ikke slette faktura: " + error.message);
       }
 
-      // uansett, hent fasit fra databasen
-      await load("manual");
+      // hent fasit fra databasen
+      await load();
     } catch (err: any) {
       console.error("[InvoiceTable] unknown delete one error", err);
       setError("Ukjent feil ved sletting av faktura.");
@@ -134,7 +98,7 @@ export default function InvoiceTable() {
   async function handleDeleteAll() {
     if (
       !window.confirm(
-        "Er du sikker på at du vil slette ALLE fakturaer for denne organisasjonen? Dette kan ikke angres."
+        "Er du sikker på at du vil slette ALLE fakturaer? Dette kan ikke angres."
       )
     ) {
       return;
@@ -144,12 +108,13 @@ export default function InvoiceTable() {
     setError(null);
 
     try {
-      console.log("[InvoiceTable] delete ALL for org", ACTIVE_ORG_ID);
+      console.log("[InvoiceTable] DELETE * FROM invoices");
 
       const { error } = await supabase
         .from("invoices")
         .delete()
-        .eq("org_id", ACTIVE_ORG_ID);
+        // for pilot: slett absolutt alle rader i invoices
+        .not("id", "is", null);
 
       if (error) {
         console.error("[InvoiceTable] delete all error", error);
@@ -157,8 +122,8 @@ export default function InvoiceTable() {
         alert("Kunne ikke slette alle fakturaer: " + error.message);
       }
 
-      // hent fasit fra databasen (hvis sletting funket, er dette tomt)
-      await load("manual");
+      // hent fasit (skal være tomt hvis sletting funket)
+      await load();
     } catch (err: any) {
       console.error("[InvoiceTable] unknown delete all error", err);
       setError("Ukjent feil ved sletting av alle fakturaer.");
@@ -170,7 +135,7 @@ export default function InvoiceTable() {
 
   return (
     <div className="space-y-4">
-      {/* Toppseksjon med én knapp for "Slett alle" */}
+      {/* Toppseksjon med knapper */}
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-900">
@@ -184,7 +149,7 @@ export default function InvoiceTable() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => load("manual")}
+            onClick={load}
             className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
             disabled={loading}
           >
@@ -208,7 +173,7 @@ export default function InvoiceTable() {
         </p>
       )}
 
-      {/* Selve tabellen */}
+      {/* Tabell */}
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="min-w-full text-left text-xs">
           <thead className="border-b border-slate-200 bg-slate-50 text-slate-500">
