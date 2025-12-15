@@ -1,8 +1,5 @@
 // src/lib/finance.ts
 
-// -----------------------------
-// Constants
-// -----------------------------
 export const SHADOW_PRICE_PER_TONN_NOK = 2000;
 
 export type SavingsScenario = {
@@ -32,10 +29,10 @@ export type InvoiceRow = {
 
 export type InvoiceLineRow = {
   invoice_id: string;
-  category?: string | null; // electricity/fuel/transport/waste/other
-  quantity?: number | null; // e.g. 1000
-  unit?: string | null; // kWh/L/km/kg
-  unit_price?: number | null; // NOK per unit
+  category?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+  unit_price?: number | null;
   line_total?: number | null;
   total?: number | null;
 };
@@ -145,11 +142,11 @@ export function calculateShadowScenarioSavings(params: {
 }
 
 // -----------------------------
-// Models for real savings
+// Models for line-based savings
 // -----------------------------
 export type CategoryModel = {
   unit: "kWh" | "L" | "km" | "kg";
-  emissionFactorKgCo2PerUnit: number; // coarse
+  emissionFactorKgCo2PerUnit: number;
   defaultReductionRate: number;
 };
 
@@ -175,7 +172,7 @@ export type ProjectInput = {
 
 export type ProjectMetrics = {
   annualShadowSavingsNok: number;
-  annualNetBenefitNok: number; // (cost savings + shadow savings) - opex
+  annualNetBenefitNok: number;
   paybackYears: number | null;
   npvNok: number;
   irr: number | null;
@@ -233,9 +230,7 @@ export function calculateProjectMetrics(input: ProjectInput): ProjectMetrics {
   const paybackYears = annualNetBenefitNok > 0 ? input.capexNok / annualNetBenefitNok : null;
 
   const cashflows: number[] = [-Math.max(0, input.capexNok)];
-  for (let y = 1; y <= Math.max(1, input.lifetimeYears); y++) {
-    cashflows.push(annualNetBenefitNok);
-  }
+  for (let y = 1; y <= Math.max(1, input.lifetimeYears); y++) cashflows.push(annualNetBenefitNok);
 
   return {
     annualShadowSavingsNok,
@@ -247,7 +242,7 @@ export function calculateProjectMetrics(input: ProjectInput): ProjectMetrics {
 }
 
 // -----------------------------
-// Baseline helpers (FIXED)
+// Baseline (FIXED date parsing)
 // -----------------------------
 function parseDateSafe(s: string | null): Date | null {
   if (!s) return null;
@@ -256,7 +251,6 @@ function parseDateSafe(s: string | null): Date | null {
 }
 
 function pickInvoiceDate(inv: InvoiceRow): Date | null {
-  // Prefer invoice_date if parseable, else fallback to created_at (ISO)
   const invDate = parseDateSafe(inv.invoice_date ?? null);
   if (invDate) return invDate;
 
@@ -266,10 +260,7 @@ function pickInvoiceDate(inv: InvoiceRow): Date | null {
   return null;
 }
 
-export function filterInvoicesToBaselineWindow(
-  invoices: InvoiceRow[],
-  baselineMonths: number
-): InvoiceRow[] {
+export function filterInvoicesToBaselineWindow(invoices: InvoiceRow[], baselineMonths: number) {
   const months = Math.max(1, baselineMonths || 12);
   const now = new Date();
   const start = new Date(now);
@@ -277,13 +268,13 @@ export function filterInvoicesToBaselineWindow(
 
   return invoices.filter((inv) => {
     const dt = pickInvoiceDate(inv);
-    if (!dt) return true; // best effort
+    if (!dt) return true;
     return dt >= start && dt <= now;
   });
 }
 
 // -----------------------------
-// NEW: Baseline → annual savings for a project
+// Baseline → annual savings for project
 // -----------------------------
 export type ProjectBaselineResult = {
   baselineSpendNok: number;
@@ -310,6 +301,7 @@ export function calculateBaselineForProject(params: {
 }): ProjectBaselineResult {
   const p = params.project;
 
+  // Overrides
   if (p.use_overrides) {
     return {
       baselineSpendNok: 0,
@@ -321,30 +313,33 @@ export function calculateBaselineForProject(params: {
     };
   }
 
-  const baselineInvoices = filterInvoicesToBaselineWindow(
-    params.invoices,
-    p.baseline_months || 12
-  );
-
-  const vendorFilter = (p.vendor_filter ?? "").trim().toLowerCase();
-
-  const invoiceIdSet = new Set<string>();
-  const invoiceById: Record<string, InvoiceRow> = {};
-
-  for (const inv of baselineInvoices) {
-    invoiceById[inv.id] = inv;
-
-    const v = (inv.vendor ?? "").trim().toLowerCase();
-    if (vendorFilter && v !== vendorFilter) continue;
-
-    invoiceIdSet.add(inv.id);
-  }
+  const baselineInvoices = filterInvoicesToBaselineWindow(params.invoices, p.baseline_months || 12);
 
   const reductionRate = Math.max(0, Math.min(1, safeNum(p.expected_reduction_rate)));
   const cat = (p.category ?? "").trim().toLowerCase();
   const model = CATEGORY_MODELS[cat];
 
-  // 1) Primary: invoice_lines with quantity+unit+price
+  const vendorFilter = (p.vendor_filter ?? "").trim().toLowerCase();
+
+  // "Snill" vendor match: contains match
+  const matchesVendor = (vendor: string | null) => {
+    if (!vendorFilter) return true;
+    const v = (vendor ?? "").trim().toLowerCase();
+    if (!v) return false;
+    return v.includes(vendorFilter) || vendorFilter.includes(v);
+  };
+
+  // First try vendor-filtered
+  let selectedInvoices = baselineInvoices.filter((inv) => matchesVendor(inv.vendor));
+
+  // If vendor_filter exists but matched 0, fallback to all baseline invoices
+  if (vendorFilter && selectedInvoices.length === 0) {
+    selectedInvoices = baselineInvoices;
+  }
+
+  const invoiceIdSet = new Set(selectedInvoices.map((x) => x.id));
+
+  // 1) invoice_lines (quantity/unit/price)
   if (model) {
     let qty = 0;
     let spend = 0;
@@ -384,12 +379,11 @@ export function calculateBaselineForProject(params: {
     }
   }
 
-  // 2) Fallback: invoices spend+co2 (vendor-filtered)
+  // 2) invoices fallback (spend & CO2)
   let spend2 = 0;
   let co22 = 0;
 
-  for (const id of invoiceIdSet) {
-    const inv = invoiceById[id];
+  for (const inv of selectedInvoices) {
     spend2 += safeNum(inv.amount_nok);
     co22 += safeNum(inv.total_co2_kg);
   }
