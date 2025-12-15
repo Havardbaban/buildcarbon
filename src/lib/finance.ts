@@ -1,58 +1,225 @@
 // src/lib/finance.ts
 
-export type FinanceMetrics = {
-  totalSpendNok: number;
-  totalCo2Kg: number;
-  carbonIntensityPerNok: number; // kg CO2 per NOK
-  carbonIntensityPerNokGram: number; // g CO2 per NOK (for visning)
-  co2PerMillionNokTonnes: number; // tonn CO2 per MNOK
-  carbonShadowCostNok: number; // NOK, basert på intern karbonpris
-};
-
-// Du kan endre denne til hva dere vil bruke som intern karbonpris
-// f.eks. 1000, 1500, 2000 NOK per tonn CO2e.
 export const SHADOW_PRICE_PER_TONN_NOK = 2000;
 
-type InvoiceLike = {
+// Scenarier du kan vise i UI (Tiltak)
+export type SavingsScenario = {
+  label: string;
+  reductionRate: number; // 0.1 = 10%
+};
+
+export const DEFAULT_SCENARIOS: SavingsScenario[] = [
+  { label: "Lav (10%)", reductionRate: 0.1 },
+  { label: "Middels (30%)", reductionRate: 0.3 },
+  { label: "Høy (50%)", reductionRate: 0.5 },
+];
+
+// ---- Types (tilpasset tabellene deres) ----
+
+export type InvoiceRow = {
+  id: string;
+  vendor: string | null;
   total: number | null;
   total_co2_kg: number | null;
 };
 
-/**
- * Tar en liste med fakturaer og beregner finansielle + klimarelaterte nøkkeltall.
- */
-export function calculateFinanceMetrics(invoices: InvoiceLike[]): FinanceMetrics {
-  const totalSpendNok = invoices.reduce(
-    (sum, inv) => sum + (inv.total ?? 0),
-    0
-  );
+export type InvoiceLineRow = {
+  invoice_id: string;
+  vendor?: string | null; // vi kan join’e vendor fra invoices i koden
+  line_total?: number | null; // hvis dere har "total" på linje
+  total?: number | null; // noen har total-felt på linje - vi håndterer begge
+  category?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+  unit_price?: number | null;
+};
 
-  const totalCo2Kg = invoices.reduce(
-    (sum, inv) => sum + (inv.total_co2_kg ?? 0),
-    0
-  );
+// ---- Enhetsnormalisering ----
 
-  const carbonIntensityPerNok =
-    totalSpendNok > 0 ? totalCo2Kg / totalSpendNok : 0;
+function normUnit(u?: string | null) {
+  if (!u) return null;
+  const s = u.trim().toLowerCase();
+  if (s === "kwh") return "kWh";
+  if (s === "l" || s === "liter" || s === "litre") return "L";
+  if (s === "km" || s === "kilometer") return "km";
+  if (s === "kg") return "kg";
+  if (s === "tonn" || s === "t" || s === "ton") return "t";
+  return u;
+}
 
-  const carbonIntensityPerNokGram = carbonIntensityPerNok * 1000; // g/NOK
+function lineAmountNok(line: InvoiceLineRow) {
+  // støtter flere mulige feltnavn
+  const a =
+    (typeof line.line_total === "number" ? line.line_total : null) ??
+    (typeof line.total === "number" ? line.total : null);
+  return a ?? 0;
+}
 
-  const totalCo2Tonnes = totalCo2Kg / 1000;
+// ---- Modell: hva slags kategori kan gi “ekte” savings? ----
+// Dette er en enkel, praktisk modell. Start med få kategorier og utvid.
 
-  const co2PerMillionNokTonnes =
-    totalSpendNok > 0
-      ? totalCo2Tonnes / (totalSpendNok / 1_000_000)
-      : 0;
+export type CategoryModel = {
+  // forventet unit (for å unngå å regne feil)
+  unit: "kWh" | "L" | "km" | "kg" | "t";
+  // emission factor per unit (kg CO2 per unit) – grovt
+  // NB: bytt til mer presis senere (land/energimiks osv)
+  emissionFactorKgCo2PerUnit: number;
+  // “ekte” kostbesparelse antas proporsjonal med reduksjon i mengde
+  // (dvs samme enhetspris)
+  defaultReductionRate: number; // typisk potensial for kategori
+};
 
-  const carbonShadowCostNok =
-    totalCo2Tonnes * SHADOW_PRICE_PER_TONN_NOK;
+export const CATEGORY_MODELS: Record<string, CategoryModel> = {
+  electricity: {
+    unit: "kWh",
+    emissionFactorKgCo2PerUnit: 0.10,
+    defaultReductionRate: 0.15,
+  },
+  fuel: {
+    unit: "L",
+    emissionFactorKgCo2PerUnit: 2.60,
+    defaultReductionRate: 0.10,
+  },
+  transport: {
+    unit: "km",
+    emissionFactorKgCo2PerUnit: 0.18,
+    defaultReductionRate: 0.10,
+  },
+  waste: {
+    unit: "kg",
+    emissionFactorKgCo2PerUnit: 0.50,
+    defaultReductionRate: 0.10,
+  },
+};
 
-  return {
-    totalSpendNok,
-    totalCo2Kg,
-    carbonIntensityPerNok,
-    carbonIntensityPerNokGram,
-    co2PerMillionNokTonnes,
-    carbonShadowCostNok,
-  };
+// ---- Resultater ----
+
+export type ShadowSavings = {
+  scenarioLabel: string;
+  reductionRate: number;
+  co2ReducedKg: number;
+  shadowSavingsNok: number;
+};
+
+export type RealSavings = {
+  category: string;
+  unit: string;
+  baselineQuantity: number;
+  baselineSpendNok: number;
+  avgUnitPriceNok: number;
+  assumedReductionRate: number;
+  quantityReduced: number;
+  costSavingsNok: number;
+  co2SavingsKg: number;
+  shadowSavingsNok: number;
+};
+
+// ---- Beregninger ----
+
+// (A) Basert på invoices (CO₂ × skyggepris)
+export function calculateShadowSavingsFromInvoices(
+  invoices: InvoiceRow[],
+  scenarios: SavingsScenario[] = DEFAULT_SCENARIOS
+): ShadowSavings[] {
+  const totalCo2Kg = invoices.reduce((sum, r) => sum + (r.total_co2_kg ?? 0), 0);
+
+  return scenarios.map((s) => {
+    const co2ReducedKg = totalCo2Kg * s.reductionRate;
+    const shadowSavingsNok = (co2ReducedKg / 1000) * SHADOW_PRICE_PER_TONN_NOK;
+    return {
+      scenarioLabel: s.label,
+      reductionRate: s.reductionRate,
+      co2ReducedKg,
+      shadowSavingsNok,
+    };
+  });
+}
+
+// (B) Basert på invoice_lines når vi har quantity/unit/category
+export function calculateRealSavingsFromLines(
+  lines: InvoiceLineRow[],
+  opts?: { overrideReductionRate?: number }
+): RealSavings[] {
+  // grupper per category
+  const byCat: Record<
+    string,
+    { qty: number; spend: number; unit: string | null; model?: CategoryModel }
+  > = {};
+
+  for (const line of lines) {
+    const category = (line.category ?? "").trim().toLowerCase();
+    if (!category) continue;
+
+    const model = CATEGORY_MODELS[category];
+    if (!model) continue; // vi regner kun på kategorier vi kjenner
+
+    const unit = normUnit(line.unit);
+    if (unit !== model.unit) continue; // unngå feil (kWh vs L osv)
+
+    const quantity = typeof line.quantity === "number" ? line.quantity : 0;
+    if (!quantity || quantity <= 0) continue;
+
+    const spend = lineAmountNok(line);
+
+    if (!byCat[category]) {
+      byCat[category] = { qty: 0, spend: 0, unit, model };
+    }
+    byCat[category].qty += quantity;
+    byCat[category].spend += spend;
+  }
+
+  const out: RealSavings[] = [];
+
+  for (const [category, agg] of Object.entries(byCat)) {
+    const model = agg.model!;
+    const baselineQuantity = agg.qty;
+    const baselineSpendNok = agg.spend;
+
+    const avgUnitPriceNok =
+      baselineQuantity > 0 ? baselineSpendNok / baselineQuantity : 0;
+
+    const assumedReductionRate =
+      typeof opts?.overrideReductionRate === "number"
+        ? opts.overrideReductionRate
+        : model.defaultReductionRate;
+
+    const quantityReduced = baselineQuantity * assumedReductionRate;
+    const costSavingsNok = quantityReduced * avgUnitPriceNok;
+
+    const co2SavingsKg = quantityReduced * model.emissionFactorKgCo2PerUnit;
+    const shadowSavingsNok = (co2SavingsKg / 1000) * SHADOW_PRICE_PER_TONN_NOK;
+
+    out.push({
+      category,
+      unit: model.unit,
+      baselineQuantity,
+      baselineSpendNok,
+      avgUnitPriceNok,
+      assumedReductionRate,
+      quantityReduced,
+      costSavingsNok,
+      co2SavingsKg,
+      shadowSavingsNok,
+    });
+  }
+
+  // sort: høyest estimert kost-besparelse først
+  out.sort((a, b) => b.costSavingsNok - a.costSavingsNok);
+
+  return out;
+}
+
+// Små helper-format (valgfritt)
+export function fmtNok(n: number) {
+  return new Intl.NumberFormat("nb-NO", {
+    style: "currency",
+    currency: "NOK",
+    maximumFractionDigits: 0,
+  }).format(n);
+}
+
+export function fmtNumber(n: number, digits = 0) {
+  return new Intl.NumberFormat("nb-NO", {
+    maximumFractionDigits: digits,
+  }).format(n);
 }
