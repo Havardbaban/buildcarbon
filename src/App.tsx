@@ -11,6 +11,8 @@ import DashboardPage from "./pages/Dashboard";
 import ESG from "./pages/ESG";
 import UploadInvoicePage from "./pages/UploadInvoice";
 import DocumentsPage from "./pages/Documents";
+import ProjectsPage from "./pages/Projects"; // ✅ NY
+
 import AppShell from "./components/AppShell";
 
 export default function App() {
@@ -30,6 +32,7 @@ export default function App() {
           <Route path="/upload" element={<UploadInvoicePage />} />
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/measures" element={<Measures />} />
+          <Route path="/projects" element={<ProjectsPage />} /> {/* ✅ NY */}
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/esg" element={<ESG />} />
         </Routes>
