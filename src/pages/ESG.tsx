@@ -12,28 +12,16 @@ type Row = {
   scope: string | null;
 };
 
-function parseMoneyToNumber(input: unknown): number {
-  if (input === null || input === undefined) return 0;
-  if (typeof input === "number" && Number.isFinite(input)) return input;
-
-  // håndter "1 115,42", "599,44", "1.115,42", "NOK 599,44", etc.
-  const s = String(input)
-    .replace(/\s/g, "")
-    .replace(/kr|nok|nkr|,-/gi, "")
-    .trim();
-
-  if (!s) return 0;
-
-  // norsk format -> js float: 1.234,56 -> 1234.56
-  const normalized = s.replace(/\./g, "").replace(/,/g, ".");
-  const n = Number(normalized);
-  return Number.isFinite(n) ? n : 0;
-}
-
 function toNumber(input: unknown): number {
   if (input === null || input === undefined) return 0;
   if (typeof input === "number" && Number.isFinite(input)) return input;
-  const n = Number(input);
+
+  // håndter numeric som string, og evt norsk komma
+  const s = String(input).trim();
+  if (!s) return 0;
+
+  const normalized = s.replace(/\s/g, "").replace(/\./g, "").replace(/,/g, ".");
+  const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -61,11 +49,10 @@ export default function ESGPage() {
       setError(null);
       setLoading(true);
 
-      // ✅ Viktig: vi velger bare kolonner vi forventer finnes
-      // Hvis du VET at du har total_amount/amount_nok/total_nok, kan du legge de inn.
+      // ✅ HER: vi henter amount (riktig kolonne hos deg)
       const { data, error } = await supabase
         .from("invoices")
-        .select("id, vendor, total, total_co2_kg, scope")
+        .select("id, vendor, amount, total, total_co2_kg, co2_kg, scope")
         .eq("org_id", ACTIVE_ORG_ID);
 
       if (error) throw error;
@@ -73,11 +60,12 @@ export default function ESGPage() {
       const mapped: Row[] = (data ?? []).map((r: any) => {
         const vendor = (r.vendor ?? "Ukjent").toString().trim() || "Ukjent";
 
-        // Beløp: her bruker vi "total" (standard hos dere).
-        // Hvis du har beløpet i en annen kolonne, si hva den heter så oppdaterer jeg.
-        const amountNok = parseMoneyToNumber(r.total);
+        // ✅ Beløp: bruk amount først, fallback til total hvis den finnes
+        const amountNok = toNumber(r.amount) || toNumber(r.total) || 0;
 
-        const co2Kg = toNumber(r.total_co2_kg);
+        // ✅ CO2: prøv begge
+        const co2Kg = toNumber(r.total_co2_kg) || toNumber(r.co2_kg) || 0;
+
         const scope = (r.scope ?? null) as string | null;
 
         return {
@@ -115,9 +103,10 @@ export default function ESGPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ Akkumulering: dette summerer alle rows
   const metrics = useMemo(() => {
     const base = rows.map((r) => ({
-      total: r.amountNok,
+      total: r.amountNok, // send inn beløpet som "total" til calculateFinanceMetrics
       total_co2_kg: r.co2Kg,
     }));
     return calculateFinanceMetrics(base);
@@ -237,8 +226,7 @@ export default function ESGPage() {
         </div>
 
         <div className="mt-3 text-xs text-neutral-500">
-          Hvis beløp fortsatt vises feil: sjekk at beløpet ligger i kolonnen <code>total</code> i{" "}
-          <code>invoices</code>.
+          Nå summerer vi <code>amount</code> (fallback <code>total</code>) fra <code>invoices</code>.
         </div>
       </section>
     </div>
