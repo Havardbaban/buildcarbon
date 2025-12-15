@@ -70,7 +70,6 @@ export default function ProjectsPage() {
       setError(null);
       setLoading(true);
 
-      // 1) projects
       const { data: pData, error: pErr } = await supabase
         .from("measures_projects")
         .select(
@@ -107,7 +106,6 @@ export default function ProjectsPage() {
         created_at: String(r.created_at ?? ""),
       }));
 
-      // 2) invoices (need id, vendor, amount_nok, total_co2_kg, invoice_date/created_at)
       const { data: iData, error: iErr } = await supabase
         .from("invoices")
         .select("id, vendor, amount_nok, total_co2_kg, invoice_date, created_at")
@@ -119,13 +117,11 @@ export default function ProjectsPage() {
         id: String(r.id),
         vendor: r.vendor ?? null,
         amount_nok: typeof r.amount_nok === "number" ? r.amount_nok : Number(r.amount_nok ?? 0),
-        total_co2_kg:
-          typeof r.total_co2_kg === "number" ? r.total_co2_kg : Number(r.total_co2_kg ?? 0),
+        total_co2_kg: typeof r.total_co2_kg === "number" ? r.total_co2_kg : Number(r.total_co2_kg ?? 0),
         invoice_date: r.invoice_date ?? null,
         created_at: r.created_at ?? null,
       }));
 
-      // 3) invoice_lines (keep minimal set of columns you likely have)
       const invoiceIds = mappedInvoices.map((x) => x.id);
       let mappedLines: InvoiceLineRow[] = [];
 
@@ -135,7 +131,6 @@ export default function ProjectsPage() {
           .select("invoice_id, category, quantity, unit, unit_price, line_total, total")
           .in("invoice_id", invoiceIds);
 
-        // don't hard-fail if lines schema differs; show fallback savings from invoices
         if (lErr) {
           console.warn("invoice_lines load failed:", lErr);
         } else {
@@ -291,6 +286,9 @@ export default function ProjectsPage() {
         <p className="text-sm text-neutral-600">
           Nå kobles tiltak automatisk til faktura-baseline (invoice_lines først, fallback til invoices).
         </p>
+        <div className="text-xs text-neutral-500">
+          Debug: invoices={invoices.length} · invoice_lines={lines.length}
+        </div>
       </header>
 
       {/* Create */}
@@ -487,11 +485,7 @@ export default function ProjectsPage() {
                   <Card title="Baseline spend" value={fmtNok(baseline.baselineSpendNok)} />
                   <Card
                     title="Baseline mengde"
-                    value={
-                      baseline.baselineUnit
-                        ? `${fmtNumber(baseline.baselineQuantity, 0)} ${baseline.baselineUnit}`
-                        : "—"
-                    }
+                    value={baseline.baselineUnit ? `${fmtNumber(baseline.baselineQuantity, 0)} ${baseline.baselineUnit}` : "—"}
                   />
                   <Card title="Årlig kost-sparing" value={fmtNok(baseline.annualCostSavingsNok)} />
                   <Card title="Årlig CO₂-sparing" value={`${fmtNumber(baseline.annualCo2SavingsKg, 1)} kg`} />
