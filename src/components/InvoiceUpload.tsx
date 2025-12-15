@@ -1,275 +1,96 @@
-// src/components/InvoiceUpload.tsx
-//
-// New invoice upload & processing flow using Azure Document Intelligence.
-// - User selects multiple files
-// - We queue them
-// - For each file we call Azure, compute CO₂, and insert a row into Supabase
-//
+// src/lib/processInvoiceUpload.ts
+import { externalOcr } from "./externalOcr";
+import { parseInvoiceLines } from "./parseInvoiceLines";
+import { saveDocumentLinesWithCo2 } from "./saveDocumentLinesWithCo2";
+import { estimateInvoiceEmissionsKg } from "./estimateEmissions";
 
-import React, { useState } from "react";
-import { supabase } from "../lib/supabase";
-import { ACTIVE_ORG_ID } from "../lib/org";
-import { analyzeInvoiceWithAzure, ParsedInvoice } from "../lib/azureInvoice";
-
-type FileStatus = "pending" | "processing" | "done" | "error";
-
-type UploadItem = {
-  id: string;
-  file: File;
-  name: string;
-  status: FileStatus;
-  message?: string;
-  co2Kg?: number;
-  amountNok?: number;
-};
-
-export default function InvoiceUpload() {
-  const [items, setItems] = useState<UploadItem[]>([]);
-  const [isProcessingAll, setIsProcessingAll] = useState(false);
-
-  // ---- file selection ----------------------------------------------------
-
-  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (!files || !files.length) return;
-
-    const newItems: UploadItem[] = Array.from(files).map((file) => ({
-      id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
-        .toString(36)
-        .slice(2)}`,
-      file,
-      name: file.name,
-      status: "pending",
-    }));
-
-    setItems((prev) => [...prev, ...newItems]);
-    e.target.value = "";
+function toNumber(x: any): number | null {
+  if (x == null) return null;
+  if (typeof x === "number") return Number.isFinite(x) ? x : null;
+  if (typeof x === "string") {
+    const s = x.replace(/\s/g, "").replace(/\./g, "").replace(",", ".");
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
   }
+  return null;
+}
 
-  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    const files = e.dataTransfer.files;
-    if (!files || !files.length) return;
+function pickField(azure: any, name: string): any {
+  // Azure prebuilt invoice often: documents[0].fields.<Name>.value
+  return azure?.documents?.[0]?.fields?.[name];
+}
 
-    const newItems: UploadItem[] = Array.from(files).map((file) => ({
-      id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()
-        .toString(36)
-        .slice(2)}`,
-      file,
-      name: file.name,
-      status: "pending",
-    }));
+function pickText(f: any): string | null {
+  if (!f) return null;
+  return (f?.value ?? f?.content ?? f?.text ?? null) as any;
+}
 
-    setItems((prev) => [...prev, ...newItems]);
-  }
+function pickAmount(f: any): number | null {
+  if (!f) return null;
+  // could be { value: { amount: 123, currencySymbol: "kr" } }
+  const v = f?.value?.amount ?? f?.value ?? f?.content ?? null;
+  return toNumber(v);
+}
 
-  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-  }
+export async function processInvoiceUpload(file: File, publicUrl?: string | null) {
+  // 1) OCR
+  const azure = await externalOcr(file);
 
-  // ---- processing --------------------------------------------------------
+  // 2) Parse invoice header fields
+  const vendor =
+    pickText(pickField(azure, "VendorName")) ??
+    pickText(pickField(azure, "Vendor")) ??
+    null;
 
-  async function processSingleItem(item: UploadItem): Promise<UploadItem> {
-    try {
-      const parsed: ParsedInvoice = await analyzeInvoiceWithAzure(item.file);
+  const invoiceNo =
+    pickText(pickField(azure, "InvoiceId")) ??
+    pickText(pickField(azure, "InvoiceNumber")) ??
+    null;
 
-      // Insert into Supabase "invoices" table
-      const { error } = await supabase.from("invoices").insert({
-        org_id: ACTIVE_ORG_ID,
-        vendor: parsed.supplierName,
-        customer_name: parsed.customerName,
-        invoice_number: parsed.invoiceNumber,
-        invoice_date: parsed.invoiceDate, // column is DATE; we pass "YYYY-MM-DD"
-        due_date: parsed.dueDate,
-        amount_nok: parsed.totalAmountNok,
-        currency: parsed.currency,
-        total_co2_kg: parsed.co2KgEstimate,
-        scope: parsed.scope,
-        status: "parsed",
-      });
+  const invoiceDate =
+    pickText(pickField(azure, "InvoiceDate")) ??
+    pickText(pickField(azure, "Date")) ??
+    null;
 
-      if (error) {
-        console.error("Supabase insert error", error);
-        return {
-          ...item,
-          status: "error",
-          message: `Supabase error: ${error.message}`,
-        };
-      }
+  const total =
+    pickAmount(pickField(azure, "InvoiceTotal")) ??
+    pickAmount(pickField(azure, "Total")) ??
+    0;
 
-      return {
-        ...item,
-        status: "done",
-        co2Kg: parsed.co2KgEstimate,
-        amountNok: parsed.totalAmountNok,
-        message: `Saved to database – CO₂: ${parsed.co2KgEstimate.toFixed(
-          1
-        )} kg`,
-      };
-    } catch (err: any) {
-      console.error("Processing error", err);
-      return {
-        ...item,
-        status: "error",
-        message: err?.message ?? "Unexpected error",
-      };
-    }
-  }
+  const currency =
+    pickText(pickField(azure, "InvoiceTotal")) ??
+    "NOK";
 
-  async function handleProcessAll() {
-    if (isProcessingAll) return;
-    if (!items.some((i) => i.status === "pending")) return;
+  // 3) Parse line items with qty/unit/price/category
+  const lines = parseInvoiceLines(azure);
 
-    setIsProcessingAll(true);
+  // 4) Estimate CO2 (your current approach)
+  const totalCo2Kg = estimateInvoiceEmissionsKg({
+    amountNok: total,
+    vendor: vendor ?? "",
+    lines,
+  });
 
-    try {
-      let updated = [...items];
+  // 5) Save invoice + lines
+  const saved = await saveDocumentLinesWithCo2({
+    vendor,
+    invoice_no: invoiceNo,
+    invoice_date: invoiceDate,
+    currency: "NOK",
+    amount_nok: total ?? 0,
+    total_co2_kg: totalCo2Kg,
+    public_url: publicUrl ?? null,
+    status: "ok",
+    lines,
+  });
 
-      for (let i = 0; i < updated.length; i++) {
-        const item = updated[i];
-        if (item.status !== "pending") continue;
-
-        updated[i] = { ...item, status: "processing", message: "Behandler..." };
-        setItems([...updated]);
-
-        const processed = await processSingleItem(updated[i]);
-        updated[i] = processed;
-        setItems([...updated]);
-      }
-    } finally {
-      setIsProcessingAll(false);
-    }
-  }
-
-  // ---- UI ----------------------------------------------------------------
-
-  return (
-    <div className="space-y-8">
-      <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-2xl font-semibold text-slate-900 mb-2">
-          Last opp faktura
-        </h1>
-        <p className="text-sm text-slate-600 mb-6">
-          Velg en PDF eller et bilde av en faktura. Systemet bruker Azure
-          Document Intelligence til å lese fakturaen, beregner CO₂ og lagrer
-          den på din organisasjon.
-        </p>
-
-        <div className="rounded-xl border border-dashed border-emerald-300 bg-emerald-50/40 p-8">
-          <div
-            className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-slate-300 bg-white px-8 py-12 text-center"
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-          >
-            <p className="text-lg font-medium text-slate-900">
-              Last opp fakturaer
-            </p>
-            <p className="text-sm text-slate-500 max-w-xl">
-              Slipp filer her, eller klikk for å velge. Vi leser norsk og
-              engelsk automatisk med Azure OCR og lagrer resultatet.
-              <br />
-              Støtter PDF, PNG, JPG. Du kan velge mange samtidig.
-            </p>
-
-            <label className="mt-4 inline-flex cursor-pointer items-center rounded-full bg-emerald-600 px-6 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-700">
-              Velg filer
-              <input
-                type="file"
-                accept=".pdf,image/*"
-                multiple
-                className="hidden"
-                onChange={handleFileInputChange}
-              />
-            </label>
-          </div>
-
-          <div className="mt-6 flex justify-end">
-            <button
-              type="button"
-              onClick={handleProcessAll}
-              disabled={
-                isProcessingAll || !items.some((i) => i.status === "pending")
-              }
-              className="inline-flex items-center rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white shadow disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {isProcessingAll ? "Behandler..." : "Start behandling"}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900 mb-4">Kø</h2>
-
-        {items.length === 0 ? (
-          <p className="text-sm text-slate-500">
-            Ingen filer i køen ennå. Last opp fakturaer for å komme i gang.
-          </p>
-        ) : (
-          <ul className="space-y-3">
-            {items.map((item) => (
-              <li
-                key={item.id}
-                className="flex flex-col gap-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium text-slate-900 truncate">
-                    {item.name}
-                  </span>
-                  <span className="text-xs font-semibold uppercase tracking-wide">
-                    {item.status === "pending" && (
-                      <span className="text-amber-700">klar</span>
-                    )}
-                    {item.status === "processing" && (
-                      <span className="text-sky-700">behandler…</span>
-                    )}
-                    {item.status === "done" && (
-                      <span className="text-emerald-700">ferdig</span>
-                    )}
-                    {item.status === "error" && (
-                      <span className="text-red-700">feil</span>
-                    )}
-                  </span>
-                </div>
-
-                <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
-                  <div
-                    className={`h-full transition-all ${
-                      item.status === "done"
-                        ? "w-full bg-emerald-500"
-                        : item.status === "processing"
-                        ? "w-1/2 bg-sky-400"
-                        : item.status === "error"
-                        ? "w-full bg-red-400"
-                        : "w-1/4 bg-slate-300"
-                    }`}
-                  />
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                  <span>
-                    CO₂:{" "}
-                    {item.co2Kg != null
-                      ? `${item.co2Kg.toFixed(1)} kg`
-                      : "–"}
-                  </span>
-                  <span>
-                    Beløp:{" "}
-                    {item.amountNok != null
-                      ? `${item.amountNok.toLocaleString("nb-NO", {
-                          maximumFractionDigits: 2,
-                        })} NOK`
-                      : "–"}
-                  </span>
-                  {item.message && (
-                    <span className="text-slate-500">• {item.message}</span>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
-  );
+  return {
+    invoiceId: saved.invoiceId,
+    vendor,
+    invoiceNo,
+    invoiceDate,
+    amountNok: total ?? 0,
+    totalCo2Kg,
+    linesCount: lines.length,
+  };
 }
