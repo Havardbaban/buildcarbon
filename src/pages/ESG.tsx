@@ -24,7 +24,7 @@ function parseMoneyToNumber(input: unknown): number {
 
   if (!s) return 0;
 
-  // norsk format -> js float
+  // norsk format -> js float: 1.234,56 -> 1234.56
   const normalized = s.replace(/\./g, "").replace(/,/g, ".");
   const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
@@ -61,42 +61,23 @@ export default function ESGPage() {
       setError(null);
       setLoading(true);
 
-      // Henter flere mulige feltnavn slik at UI ikke blir 0 selv om schema varierer
+      // ✅ Viktig: vi velger bare kolonner vi forventer finnes
+      // Hvis du VET at du har total_amount/amount_nok/total_nok, kan du legge de inn.
       const { data, error } = await supabase
         .from("invoices")
-        .select(
-          [
-            "id",
-            "vendor",
-            "supplier_name",
-            "total",
-            "total_amount",
-            "amount_nok",
-            "total_nok",
-            "co2_kg",
-            "total_co2_kg",
-            "scope",
-          ].join(",")
-        )
+        .select("id, vendor, total, total_co2_kg, scope")
         .eq("org_id", ACTIVE_ORG_ID);
 
       if (error) throw error;
 
       const mapped: Row[] = (data ?? []).map((r: any) => {
-        const vendor =
-          (r.vendor ?? r.supplier_name ?? "Ukjent").toString().trim() || "Ukjent";
+        const vendor = (r.vendor ?? "Ukjent").toString().trim() || "Ukjent";
 
-        // Beløp: prøv flere felt + robust parsing
-        const amountNok =
-          parseMoneyToNumber(r.total) ||
-          parseMoneyToNumber(r.total_amount) ||
-          parseMoneyToNumber(r.amount_nok) ||
-          parseMoneyToNumber(r.total_nok) ||
-          0;
+        // Beløp: her bruker vi "total" (standard hos dere).
+        // Hvis du har beløpet i en annen kolonne, si hva den heter så oppdaterer jeg.
+        const amountNok = parseMoneyToNumber(r.total);
 
-        // CO2: prøv begge
-        const co2Kg = toNumber(r.total_co2_kg) || toNumber(r.co2_kg) || 0;
-
+        const co2Kg = toNumber(r.total_co2_kg);
         const scope = (r.scope ?? null) as string | null;
 
         return {
@@ -119,7 +100,6 @@ export default function ESGPage() {
   useEffect(() => {
     load();
 
-    // Realtime refresh når invoices endres
     const ch = supabase
       .channel("esg-live")
       .on(
@@ -136,7 +116,6 @@ export default function ESGPage() {
   }, []);
 
   const metrics = useMemo(() => {
-    // calculateFinanceMetrics forventer feltene total + total_co2_kg
     const base = rows.map((r) => ({
       total: r.amountNok,
       total_co2_kg: r.co2Kg,
@@ -179,21 +158,15 @@ export default function ESGPage() {
         </p>
       </header>
 
-      {/* Stat cards */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <StatCard title="Totale innkjøp (NOK)" value={fmtNok(metrics.totalSpendNok)} />
-        <StatCard
-          title="Totalt CO₂-avtrykk (kg)"
-          value={fmtNumber(metrics.totalCo2Kg)}
-        />
+        <StatCard title="Totalt CO₂-avtrykk (kg)" value={fmtNumber(metrics.totalCo2Kg, 1)} />
         <StatCard
           title="CO₂-intensitet (g / NOK)"
           value={fmtNumber(metrics.carbonIntensityPerNokGram, 1)}
         />
         <StatCard
-          title={`Skyggekostnad (NOK) – ${fmtNumber(
-            SHADOW_PRICE_PER_TONN_NOK
-          )} kr/tCO₂e`}
+          title={`Skyggekostnad (NOK) – ${fmtNumber(SHADOW_PRICE_PER_TONN_NOK)} kr/tCO₂e`}
           value={fmtNok(metrics.carbonShadowCostNok)}
         />
       </section>
@@ -212,12 +185,12 @@ export default function ESGPage() {
           <div className="text-sm font-medium">Forklaring</div>
           <ul className="mt-2 text-sm text-neutral-700 space-y-1 list-disc ml-5">
             <li>
-              <b>CO₂-intensitet (g/NOK)</b> viser hvor mye utslipp dere indirekte kjøper per
-              krone i leverandørkjeden (Scope 3).
+              <b>CO₂-intensitet (g/NOK)</b> viser hvor mye utslipp dere indirekte kjøper per krone
+              i leverandørkjeden (Scope 3).
             </li>
             <li>
-              <b>CO₂ per MNOK</b> er tonn CO₂ per 1 million kroner innkjøp – brukes ofte av
-              banker og ESG-analytikere.
+              <b>CO₂ per MNOK</b> er tonn CO₂ per 1 million kroner innkjøp – brukes ofte av banker og
+              ESG-analytikere.
             </li>
             <li>
               <b>Skyggekostnad</b> er en intern beregnet kostnad hvis dere priser CO₂ til{" "}
@@ -227,7 +200,6 @@ export default function ESGPage() {
         </div>
       </section>
 
-      {/* Vendor table */}
       <section className="rounded-2xl border bg-white shadow-sm p-4">
         <div className="text-lg font-semibold">Scope 3 – leverandører (sortert på høyest CO₂)</div>
         <div className="text-sm text-neutral-600">
@@ -264,11 +236,9 @@ export default function ESGPage() {
           </table>
         </div>
 
-        {/* Debug hint (kan fjernes senere) */}
         <div className="mt-3 text-xs text-neutral-500">
-          Tips: Hvis beløp fortsatt vises som 0, sjekk at `invoices` faktisk har en av feltene:{" "}
-          <code>total</code>, <code>total_amount</code>, <code>amount_nok</code> eller{" "}
-          <code>total_nok</code>.
+          Hvis beløp fortsatt vises feil: sjekk at beløpet ligger i kolonnen <code>total</code> i{" "}
+          <code>invoices</code>.
         </div>
       </section>
     </div>
