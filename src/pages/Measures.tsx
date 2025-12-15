@@ -1,219 +1,342 @@
-// src/lib/measures.ts
-import { supabase } from "./supabase";
-import { ACTIVE_ORG_ID } from "./org";
+// src/pages/Measures.tsx
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  computeMeasureBaseline,
+  createMeasure,
+  deleteMeasure,
+  fetchInvoiceLineCategories,
+  fetchMeasures,
+  fetchVendors,
+  fmtKg,
+  fmtNok,
+  fmtTon,
+  MeasureRow,
+} from "../lib/measures";
+import { ACTIVE_ORG_ID } from "../lib/org";
 
-export type MeasureRow = {
-  id: string;
-  org_id: string;
-  name: string;
-  category: string;
-  vendor: string | null;
-  reduction_percent: number; // 0-100
-  baseline_months: number;
+type BaselineMap = Record<string, Awaited<ReturnType<typeof computeMeasureBaseline>> | null>;
 
-  capex_nok: number;
-  opex_annual_nok: number;
-  lifetime_years: number;
-  discount_rate: number; // 0-1
-  co2_price_nok_per_ton: number;
-
-  notes: string | null;
-  created_at: string;
-};
-
-export type MeasureBaseline = {
-  months: number;
-
-  // Summer for perioden (N måneder)
-  period_amount_nok: number;
-  period_co2_kg: number;
-
-  // Skalert til "årlig baseline"
-  annual_amount_nok: number;
-  annual_co2_kg: number;
-
-  // Sparing (årlig)
-  annual_saving_nok: number;
-  annual_saving_kg: number;
-
-  // Skyggekost/gevinst (årlig) fra CO2-pris
-  annual_shadow_saving_nok: number;
-};
-
-function monthsAgoISO(months: number) {
-  const d = new Date();
-  d.setMonth(d.getMonth() - months);
-  return d.toISOString();
-}
-
-function toNum(x: any): number {
-  const n = typeof x === "number" ? x : Number(x);
+function num(v: string) {
+  const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
-/**
- * Henter tilgjengelige kategorier fra invoice_lines for dropdown.
- */
-export async function fetchInvoiceLineCategories(orgId = ACTIVE_ORG_ID): Promise<string[]> {
-  const { data, error } = await supabase
-    .from("invoice_lines")
-    .select("category")
-    .eq("org_id", orgId);
+export default function MeasuresPage() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-  if (error) throw error;
+  const [measures, setMeasures] = useState<MeasureRow[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [vendors, setVendors] = useState<string[]>([]);
+  const [baselineById, setBaselineById] = useState<BaselineMap>({});
 
-  const set = new Set<string>();
-  for (const r of data ?? []) {
-    const c = (r as any).category;
-    if (typeof c === "string" && c.trim()) set.add(c.trim());
+  // form
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
+  const [vendor, setVendor] = useState<string>(""); // empty = no filter
+  const [reductionPercent, setReductionPercent] = useState("10");
+  const [baselineMonths, setBaselineMonths] = useState("12");
+
+  async function loadAll() {
+    try {
+      setErr(null);
+      setLoading(true);
+
+      const [cats, vends, ms] = await Promise.all([
+        fetchInvoiceLineCategories(ACTIVE_ORG_ID),
+        fetchVendors(ACTIVE_ORG_ID),
+        fetchMeasures(ACTIVE_ORG_ID),
+      ]);
+
+      setCategories(cats);
+      setVendors(vends);
+      setMeasures(ms);
+
+      // default category i form
+      if (!category && cats.length) setCategory(cats[0]);
+
+      // compute baselines
+      const entries = await Promise.all(
+        ms.map(async (m) => {
+          try {
+            const b = await computeMeasureBaseline(m, ACTIVE_ORG_ID);
+            return [m.id, b] as const;
+          } catch {
+            return [m.id, null] as const;
+          }
+        })
+      );
+
+      const map: BaselineMap = {};
+      for (const [id, b] of entries) map[id] = b;
+      setBaselineById(map);
+    } catch (e: any) {
+      setErr(e?.message ?? "Ukjent feil");
+    } finally {
+      setLoading(false);
+    }
   }
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
-}
 
-/**
- * Henter vendor-list (fra invoices.vendor) for dropdown.
- */
-export async function fetchVendors(orgId = ACTIVE_ORG_ID): Promise<string[]> {
-  const { data, error } = await supabase
-    .from("invoices")
-    .select("vendor")
-    .eq("org_id", orgId);
+  useEffect(() => {
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  if (error) throw error;
+  const totals = useMemo(() => {
+    let annualSavingNok = 0;
+    let annualSavingKg = 0;
+    let annualShadow = 0;
 
-  const set = new Set<string>();
-  for (const r of data ?? []) {
-    const v = (r as any).vendor;
-    if (typeof v === "string" && v.trim()) set.add(v.trim());
-  }
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
-}
-
-export async function fetchMeasures(orgId = ACTIVE_ORG_ID): Promise<MeasureRow[]> {
-  const { data, error } = await supabase
-    .from("measures")
-    .select("*")
-    .eq("org_id", orgId)
-    .order("created_at", { ascending: false });
-
-  if (error) throw error;
-  return (data ?? []) as any;
-}
-
-export async function createMeasure(input: Partial<MeasureRow> & { name: string; category: string }) {
-  const payload = {
-    org_id: ACTIVE_ORG_ID,
-    name: input.name,
-    category: input.category,
-    vendor: input.vendor ?? null,
-    reduction_percent: toNum(input.reduction_percent ?? 10),
-    baseline_months: Math.max(1, Math.floor(toNum(input.baseline_months ?? 12))),
-
-    capex_nok: toNum(input.capex_nok ?? 0),
-    opex_annual_nok: toNum(input.opex_annual_nok ?? 0),
-    lifetime_years: Math.max(1, Math.floor(toNum(input.lifetime_years ?? 5))),
-    discount_rate: toNum(input.discount_rate ?? 0.08),
-    co2_price_nok_per_ton: toNum(input.co2_price_nok_per_ton ?? 1500),
-
-    notes: input.notes ?? null,
-  };
-
-  const { error } = await supabase.from("measures").insert(payload);
-  if (error) throw error;
-}
-
-export async function deleteMeasure(id: string) {
-  const { error } = await supabase.from("measures").delete().eq("id", id);
-  if (error) throw error;
-}
-
-/**
- * Baseline + sparing:
- * - Vi bruker invoice_lines.amount_nok og invoice_lines.co2_kg
- * - Filtrerer på category + (valgfritt) vendor via invoices.vendor
- * - Ser N måneder bakover, skalerer til "årlig baseline"
- */
-export async function computeMeasureBaseline(
-  measure: Pick<MeasureRow, "category" | "vendor" | "baseline_months" | "reduction_percent" | "co2_price_nok_per_ton">,
-  orgId = ACTIVE_ORG_ID
-): Promise<MeasureBaseline> {
-  const months = Math.max(1, Math.floor(toNum(measure.baseline_months ?? 12)));
-  const since = monthsAgoISO(months);
-
-  // 1) Hent invoice_lines for org + kategori + tidsfilter
-  // Vi joiner invoices for å kunne filtrere på vendor (hvis ønsket)
-  const { data, error } = await supabase
-    .from("invoice_lines")
-    .select(
-      `
-      amount_nok,
-      co2_kg,
-      invoice_id,
-      created_at,
-      invoices:invoice_id ( vendor, created_at )
-    `
-    )
-    .eq("org_id", orgId)
-    .eq("category", measure.category)
-    .gte("created_at", since);
-
-  if (error) throw error;
-
-  let periodAmount = 0;
-  let periodCo2 = 0;
-
-  for (const row of data ?? []) {
-    const invVendor = (row as any)?.invoices?.vendor ?? null;
-
-    // vendor-filter: hvis measure.vendor er satt, må invoices.vendor matche (case-insensitive)
-    if (measure.vendor && typeof invVendor === "string") {
-      if (invVendor.trim().toLowerCase() !== measure.vendor.trim().toLowerCase()) continue;
-    } else if (measure.vendor && !invVendor) {
-      // hvis tiltak har vendor-filter, men vi mangler vendor på faktura → ikke ta med
-      continue;
+    for (const m of measures) {
+      const b = baselineById[m.id];
+      if (!b) continue;
+      annualSavingNok += b.annual_saving_nok;
+      annualSavingKg += b.annual_saving_kg;
+      annualShadow += b.annual_shadow_saving_nok;
     }
 
-    periodAmount += toNum((row as any).amount_nok);
-    periodCo2 += toNum((row as any).co2_kg);
+    return { annualSavingNok, annualSavingKg, annualShadow };
+  }, [measures, baselineById]);
+
+  async function onCreate() {
+    try {
+      setErr(null);
+      setSaving(true);
+
+      if (!name.trim()) throw new Error("Gi tiltaket et navn.");
+      if (!category.trim()) throw new Error("Velg kategori.");
+
+      await createMeasure({
+        name: name.trim(),
+        category: category.trim(),
+        vendor: vendor.trim() ? vendor.trim() : null,
+        reduction_percent: num(reductionPercent),
+        baseline_months: Math.max(1, Math.floor(num(baselineMonths))),
+      });
+
+      setName("");
+      setVendor("");
+      setReductionPercent("10");
+      setBaselineMonths("12");
+
+      await loadAll();
+    } catch (e: any) {
+      setErr(e?.message ?? "Kunne ikke opprette tiltak");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  // 2) Skaler til annual baseline
-  const scale = 12 / months;
-  const annualAmount = periodAmount * scale;
-  const annualCo2 = periodCo2 * scale;
+  async function onDelete(id: string) {
+    try {
+      setErr(null);
+      await deleteMeasure(id);
+      await loadAll();
+    } catch (e: any) {
+      setErr(e?.message ?? "Kunne ikke slette tiltak");
+    }
+  }
 
-  // 3) Sparing (årlig)
-  const rp = Math.min(100, Math.max(0, toNum(measure.reduction_percent)));
-  const factor = rp / 100;
+  return (
+    <div className="mx-auto max-w-6xl p-4">
+      <div className="mb-4">
+        <h1 className="text-2xl font-semibold">Tiltak</h1>
+        <p className="text-sm text-slate-600">
+          Tiltak kobles nå til faktura-baseline (invoice_lines) slik at du får ekte kr- og kg-sparing.
+        </p>
+      </div>
 
-  const annualSavingNok = annualAmount * factor;
-  const annualSavingKg = annualCo2 * factor;
+      {err && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{err}</div>
+      )}
 
-  // 4) Skyggegevinst (CO2-pris i NOK/tonn)
-  const co2Price = toNum(measure.co2_price_nok_per_ton ?? 1500);
-  const annualShadow = (annualSavingKg / 1000) * co2Price;
+      {/* SUMMARY */}
+      <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="rounded-xl border bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">Potensiell årlig kost-sparing</div>
+          <div className="mt-1 text-xl font-semibold">{fmtNok(totals.annualSavingNok)}</div>
+        </div>
+        <div className="rounded-xl border bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">Potensiell årlig CO₂-sparing</div>
+          <div className="mt-1 text-xl font-semibold">{fmtTon(totals.annualSavingKg)}</div>
+          <div className="text-xs text-slate-500">{fmtKg(totals.annualSavingKg)}</div>
+        </div>
+        <div className="rounded-xl border bg-white p-4 shadow-sm">
+          <div className="text-xs text-slate-500">Årlig skyggegevinst (CO₂-pris)</div>
+          <div className="mt-1 text-xl font-semibold">{fmtNok(totals.annualShadow)}</div>
+        </div>
+      </div>
 
-  return {
-    months,
-    period_amount_nok: periodAmount,
-    period_co2_kg: periodCo2,
-    annual_amount_nok: annualAmount,
-    annual_co2_kg: annualCo2,
-    annual_saving_nok: annualSavingNok,
-    annual_saving_kg: annualSavingKg,
-    annual_shadow_saving_nok: annualShadow,
-  };
-}
+      {/* CREATE */}
+      <div className="mb-6 rounded-xl border bg-white p-4 shadow-sm">
+        <div className="mb-3 text-sm font-medium">Nytt tiltak</div>
 
-/**
- * Enkel formattering
- */
-export function fmtNok(n: number) {
-  return new Intl.NumberFormat("nb-NO", { style: "currency", currency: "NOK", maximumFractionDigits: 0 }).format(n);
-}
-export function fmtKg(n: number) {
-  return new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 0 }).format(n) + " kg";
-}
-export function fmtTon(nKg: number) {
-  return new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 2 }).format(nKg / 1000) + " t";
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+          <div className="md:col-span-2">
+            <label className="text-xs text-slate-600">Navn</label>
+            <input
+              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="F.eks. Bytte til LED"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-600">Kategori</label>
+            <select
+              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            >
+              {categories.length === 0 && <option value="">Ingen kategorier funnet</option>}
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <div className="mt-1 text-xs text-slate-500">Må matche invoice_lines.category</div>
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-600">Vendor (valgfritt)</label>
+            <select
+              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+              value={vendor}
+              onChange={(e) => setVendor(e.target.value)}
+            >
+              <option value="">Alle</option>
+              {vendors.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+            <div className="mt-1 text-xs text-slate-500">Filtrerer på invoices.vendor</div>
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-600">Reduksjon (%)</label>
+            <input
+              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+              value={reductionPercent}
+              onChange={(e) => setReductionPercent(e.target.value)}
+              inputMode="decimal"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-600">Baseline (mnd)</label>
+            <input
+              className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+              value={baselineMonths}
+              onChange={(e) => setBaselineMonths(e.target.value)}
+              inputMode="numeric"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <button
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+            onClick={onCreate}
+            disabled={saving}
+          >
+            {saving ? "Lagrer..." : "Opprett tiltak"}
+          </button>
+        </div>
+      </div>
+
+      {/* LIST */}
+      <div className="rounded-xl border bg-white shadow-sm">
+        <div className="border-b p-4">
+          <div className="text-sm font-medium">Tiltaksliste</div>
+          <div className="text-xs text-slate-500">
+            Hvert tiltak får baseline fra fakturaene dine (skalert til årlig).
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="p-4 text-sm text-slate-600">Laster…</div>
+        ) : measures.length === 0 ? (
+          <div className="p-4 text-sm text-slate-600">Ingen tiltak ennå.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-600">
+                <tr>
+                  <th className="px-4 py-3">Tiltak</th>
+                  <th className="px-4 py-3">Filter</th>
+                  <th className="px-4 py-3">Baseline (årlig)</th>
+                  <th className="px-4 py-3">Sparing (årlig)</th>
+                  <th className="px-4 py-3">Skygge</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {measures.map((m) => {
+                  const b = baselineById[m.id];
+                  return (
+                    <tr key={m.id} className="border-t">
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{m.name}</div>
+                        <div className="text-xs text-slate-500">Reduksjon: {m.reduction_percent}% • Baseline: {m.baseline_months} mnd</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-xs">
+                          <div><span className="text-slate-500">Kategori:</span> {m.category}</div>
+                          <div><span className="text-slate-500">Vendor:</span> {m.vendor ?? "Alle"}</div>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {b ? (
+                          <div className="text-xs">
+                            <div>{fmtNok(b.annual_amount_nok)}</div>
+                            <div className="text-slate-500">{fmtTon(b.annual_co2_kg)}</div>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-500">Ingen baseline funnet</div>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {b ? (
+                          <div className="text-xs">
+                            <div className="font-medium">{fmtNok(b.annual_saving_nok)}</div>
+                            <div className="text-slate-500">{fmtTon(b.annual_saving_kg)}</div>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-500">—</div>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {b ? <div className="text-xs">{fmtNok(b.annual_shadow_saving_nok)}</div> : <div className="text-xs text-slate-500">—</div>}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <button
+                          className="rounded-lg border px-3 py-1 text-xs hover:bg-slate-50"
+                          onClick={() => onDelete(m.id)}
+                        >
+                          Slett
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            <div className="border-t p-4 text-xs text-slate-500">
+              Hvis du ser “Ingen baseline funnet”: sjekk at faktura-linjene faktisk har <code className="rounded bg-slate-100 px-1">category</code> som matcher tiltakets kategori, og at <code className="rounded bg-slate-100 px-1">invoices.vendor</code> er satt hvis du bruker vendor-filter.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
