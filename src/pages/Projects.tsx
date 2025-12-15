@@ -205,9 +205,7 @@ export default function ProjectsPage() {
   }
 
   async function deleteProject(id: string) {
-    const ok = window.confirm(
-      "Er du sikker på at du vil slette dette tiltaket?\nDette kan ikke angres."
-    );
+    const ok = window.confirm("Er du sikker på at du vil slette dette tiltaket?\nDette kan ikke angres.");
     if (!ok) return;
 
     try {
@@ -352,9 +350,7 @@ export default function ProjectsPage() {
               type="number"
               step="0.01"
               value={form.expected_reduction_rate}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, expected_reduction_rate: Number(e.target.value) }))
-              }
+              onChange={(e) => setForm((f) => ({ ...f, expected_reduction_rate: Number(e.target.value) }))}
             />
           </Field>
 
@@ -372,7 +368,7 @@ export default function ProjectsPage() {
               className="w-full rounded-xl border p-2"
               value={form.vendor_filter}
               onChange={(e) => setForm((f) => ({ ...f, vendor_filter: e.target.value }))}
-              placeholder="Skriv nøyaktig vendor-navn for fallback"
+              placeholder="Snill match (contains) – f.eks. 'dn' eller 'hafslund'"
             />
           </Field>
 
@@ -381,9 +377,7 @@ export default function ProjectsPage() {
               className="w-full rounded-xl border p-2"
               type="number"
               value={form.carbon_price_per_ton_nok}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, carbon_price_per_ton_nok: Number(e.target.value) }))
-              }
+              onChange={(e) => setForm((f) => ({ ...f, carbon_price_per_ton_nok: Number(e.target.value) }))}
             />
           </Field>
         </div>
@@ -432,10 +426,7 @@ export default function ProjectsPage() {
           />
         </Field>
 
-        <button
-          className="rounded-xl bg-emerald-600 text-white px-4 py-2 font-medium"
-          onClick={createProject}
-        >
+        <button className="rounded-xl bg-emerald-600 text-white px-4 py-2 font-medium" onClick={createProject}>
           Opprett tiltak
         </button>
       </section>
@@ -459,12 +450,13 @@ export default function ProjectsPage() {
                     <div className="text-xs text-neutral-500">
                       Baseline: {p.baseline_months} mnd · Datakilde: {baseline.dataSource}
                     </div>
+                    <div className="text-xs text-neutral-500">
+                      Debug: invoices={invoices.length} · lines={lines.length} · vendor_filter={(p.vendor_filter ?? "—")}
+                    </div>
                   </div>
 
                   <div className="flex flex-col items-end gap-2">
-                    <div className="text-sm text-neutral-600">
-                      CO₂-pris: {fmtNok(p.carbon_price_per_ton_nok)} / tonn
-                    </div>
+                    <div className="text-sm text-neutral-600">CO₂-pris: {fmtNok(p.carbon_price_per_ton_nok)} / tonn</div>
                     <button
                       onClick={() => deleteProject(p.id)}
                       className="rounded-xl border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
@@ -492,8 +484,7 @@ export default function ProjectsPage() {
                 </div>
 
                 <div className="text-xs text-neutral-600">
-                  Årlig skygge-sparing (CO₂ × pris) er inkludert i NPV:{" "}
-                  <b>{fmtNok(m.annualShadowSavingsNok)}</b> / år
+                  Årlig skygge-sparing (CO₂ × pris) er inkludert i NPV: <b>{fmtNok(m.annualShadowSavingsNok)}</b> / år
                 </div>
               </div>
             ))}
