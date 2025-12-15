@@ -26,15 +26,15 @@ export type InvoiceRow = {
   vendor: string | null;
   amount_nok: number | null;
   total_co2_kg: number | null;
-  invoice_date?: string | null; // optional
-  created_at?: string | null;   // optional
+  invoice_date?: string | null;
+  created_at?: string | null;
 };
 
 export type InvoiceLineRow = {
   invoice_id: string;
-  category?: string | null;   // electricity/fuel/transport/waste
-  quantity?: number | null;   // e.g. 1000
-  unit?: string | null;       // kWh/L/km/kg
+  category?: string | null; // electricity/fuel/transport/waste/other
+  quantity?: number | null; // e.g. 1000
+  unit?: string | null; // kWh/L/km/kg
   unit_price?: number | null; // NOK per unit
   line_total?: number | null;
   total?: number | null;
@@ -54,10 +54,6 @@ function normUnit(u?: string | null) {
 function safeNum(n: any): number {
   const x = typeof n === "number" ? n : Number(n);
   return Number.isFinite(x) ? x : 0;
-}
-
-function safeStr(s: any): string {
-  return (s ?? "").toString();
 }
 
 export function fmtNok(n: number) {
@@ -158,90 +154,11 @@ export type CategoryModel = {
 };
 
 export const CATEGORY_MODELS: Record<string, CategoryModel> = {
-  electricity: { unit: "kWh", emissionFactorKgCo2PerUnit: 0.10, defaultReductionRate: 0.15 },
-  fuel: { unit: "L", emissionFactorKgCo2PerUnit: 2.60, defaultReductionRate: 0.10 },
-  transport: { unit: "km", emissionFactorKgCo2PerUnit: 0.18, defaultReductionRate: 0.10 },
-  waste: { unit: "kg", emissionFactorKgCo2PerUnit: 0.50, defaultReductionRate: 0.10 },
+  electricity: { unit: "kWh", emissionFactorKgCo2PerUnit: 0.1, defaultReductionRate: 0.15 },
+  fuel: { unit: "L", emissionFactorKgCo2PerUnit: 2.6, defaultReductionRate: 0.1 },
+  transport: { unit: "km", emissionFactorKgCo2PerUnit: 0.18, defaultReductionRate: 0.1 },
+  waste: { unit: "kg", emissionFactorKgCo2PerUnit: 0.5, defaultReductionRate: 0.1 },
 };
-
-export type RealSavingsRow = {
-  category: string;
-  unit: string;
-  baselineQuantity: number;
-  baselineSpendNok: number;
-  avgUnitPriceNok: number;
-  assumedReductionRate: number;
-  quantityReduced: number;
-  costSavingsNok: number;
-  co2SavingsKg: number;
-  shadowSavingsNok: number;
-};
-
-export function calculateRealSavingsFromLines(
-  lines: InvoiceLineRow[],
-  opts?: { overrideReductionRate?: number; carbonPricePerTonNok?: number }
-): RealSavingsRow[] {
-  const carbonPrice = opts?.carbonPricePerTonNok ?? SHADOW_PRICE_PER_TONN_NOK;
-
-  const agg: Record<string, { qty: number; spend: number; unit: string; model: CategoryModel }> = {};
-
-  for (const line of lines) {
-    const category = (line.category ?? "").trim().toLowerCase();
-    if (!category) continue;
-
-    const model = CATEGORY_MODELS[category];
-    if (!model) continue;
-
-    const unit = normUnit(line.unit);
-    if (unit !== model.unit) continue;
-
-    const quantity = safeNum(line.quantity);
-    if (quantity <= 0) continue;
-
-    const explicit = safeNum(line.line_total) || safeNum(line.total);
-    const unitPrice = safeNum(line.unit_price);
-    const spend = explicit > 0 ? explicit : (unitPrice > 0 ? quantity * unitPrice : 0);
-
-    if (!agg[category]) agg[category] = { qty: 0, spend: 0, unit: model.unit, model };
-    agg[category].qty += quantity;
-    agg[category].spend += spend;
-  }
-
-  const out: RealSavingsRow[] = [];
-
-  for (const [category, a] of Object.entries(agg)) {
-    const baselineQuantity = a.qty;
-    const baselineSpendNok = a.spend;
-    const avgUnitPriceNok = baselineQuantity > 0 ? baselineSpendNok / baselineQuantity : 0;
-
-    const assumedReductionRate =
-      typeof opts?.overrideReductionRate === "number"
-        ? opts.overrideReductionRate
-        : a.model.defaultReductionRate;
-
-    const quantityReduced = baselineQuantity * assumedReductionRate;
-    const costSavingsNok = quantityReduced * avgUnitPriceNok;
-
-    const co2SavingsKg = quantityReduced * a.model.emissionFactorKgCo2PerUnit;
-    const shadowSavingsNok = (co2SavingsKg / 1000) * carbonPrice;
-
-    out.push({
-      category,
-      unit: a.unit,
-      baselineQuantity,
-      baselineSpendNok,
-      avgUnitPriceNok,
-      assumedReductionRate,
-      quantityReduced,
-      costSavingsNok,
-      co2SavingsKg,
-      shadowSavingsNok,
-    });
-  }
-
-  out.sort((a, b) => b.costSavingsNok - a.costSavingsNok);
-  return out;
-}
 
 // -----------------------------
 // Project ROI / Payback / NPV
@@ -307,13 +224,13 @@ export function irr(cashflows: number[]): number | null {
 
 export function calculateProjectMetrics(input: ProjectInput): ProjectMetrics {
   const annualShadowSavingsNok =
-    (input.annualCo2SavingsKg / 1000) * (input.carbonPricePerTonNok || SHADOW_PRICE_PER_TONN_NOK);
+    (input.annualCo2SavingsKg / 1000) *
+    (input.carbonPricePerTonNok || SHADOW_PRICE_PER_TONN_NOK);
 
   const annualNetBenefitNok =
     (input.annualCostSavingsNok || 0) + annualShadowSavingsNok - (input.opexAnnualNok || 0);
 
-  const paybackYears =
-    annualNetBenefitNok > 0 ? input.capexNok / annualNetBenefitNok : null;
+  const paybackYears = annualNetBenefitNok > 0 ? input.capexNok / annualNetBenefitNok : null;
 
   const cashflows: number[] = [-Math.max(0, input.capexNok)];
   for (let y = 1; y <= Math.max(1, input.lifetimeYears); y++) {
@@ -330,21 +247,23 @@ export function calculateProjectMetrics(input: ProjectInput): ProjectMetrics {
 }
 
 // -----------------------------
-// NEW: Baseline → annual savings for a project
+// Baseline helpers (FIXED)
 // -----------------------------
-export type ProjectBaselineResult = {
-  baselineSpendNok: number;
-  baselineQuantity: number;
-  baselineUnit: string | null;
-  annualCostSavingsNok: number;
-  annualCo2SavingsKg: number;
-  dataSource: "invoice_lines" | "invoices_fallback" | "override" | "none";
-};
+function parseDateSafe(s: string | null): Date | null {
+  if (!s) return null;
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
 
-function pickInvoiceDate(inv: InvoiceRow): string | null {
-  // prefer invoice_date, else created_at
-  const d = inv.invoice_date ?? inv.created_at ?? null;
-  return d ? safeStr(d) : null;
+function pickInvoiceDate(inv: InvoiceRow): Date | null {
+  // Prefer invoice_date if parseable, else fallback to created_at (ISO)
+  const invDate = parseDateSafe(inv.invoice_date ?? null);
+  if (invDate) return invDate;
+
+  const created = parseDateSafe(inv.created_at ?? null);
+  if (created) return created;
+
+  return null;
 }
 
 export function filterInvoicesToBaselineWindow(
@@ -357,12 +276,23 @@ export function filterInvoicesToBaselineWindow(
   start.setMonth(start.getMonth() - months);
 
   return invoices.filter((inv) => {
-    const ds = pickInvoiceDate(inv);
-    if (!ds) return true; // if missing dates, keep (best effort)
-    const dt = new Date(ds);
+    const dt = pickInvoiceDate(inv);
+    if (!dt) return true; // best effort
     return dt >= start && dt <= now;
   });
 }
+
+// -----------------------------
+// NEW: Baseline → annual savings for a project
+// -----------------------------
+export type ProjectBaselineResult = {
+  baselineSpendNok: number;
+  baselineQuantity: number;
+  baselineUnit: string | null;
+  annualCostSavingsNok: number;
+  annualCo2SavingsKg: number;
+  dataSource: "invoice_lines" | "invoices_fallback" | "override" | "none";
+};
 
 export function calculateBaselineForProject(params: {
   project: {
@@ -380,16 +310,13 @@ export function calculateBaselineForProject(params: {
 }): ProjectBaselineResult {
   const p = params.project;
 
-  // 1) Overrides (bank/audit)
   if (p.use_overrides) {
-    const annualCostSavingsNok = safeNum(p.annual_cost_savings_override_nok);
-    const annualCo2SavingsKg = safeNum(p.annual_co2_savings_override_kg);
     return {
       baselineSpendNok: 0,
       baselineQuantity: 0,
       baselineUnit: null,
-      annualCostSavingsNok,
-      annualCo2SavingsKg,
+      annualCostSavingsNok: safeNum(p.annual_cost_savings_override_nok),
+      annualCo2SavingsKg: safeNum(p.annual_co2_savings_override_kg),
       dataSource: "override",
     };
   }
@@ -399,8 +326,8 @@ export function calculateBaselineForProject(params: {
     p.baseline_months || 12
   );
 
-  // build set of invoice_ids in window (+ optional vendor filter)
   const vendorFilter = (p.vendor_filter ?? "").trim().toLowerCase();
+
   const invoiceIdSet = new Set<string>();
   const invoiceById: Record<string, InvoiceRow> = {};
 
@@ -414,17 +341,17 @@ export function calculateBaselineForProject(params: {
   }
 
   const reductionRate = Math.max(0, Math.min(1, safeNum(p.expected_reduction_rate)));
-
-  // 2) Primary source: invoice_lines (category model)
   const cat = (p.category ?? "").trim().toLowerCase();
   const model = CATEGORY_MODELS[cat];
 
+  // 1) Primary: invoice_lines with quantity+unit+price
   if (model) {
     let qty = 0;
     let spend = 0;
 
     for (const line of params.lines) {
       if (!invoiceIdSet.has(line.invoice_id)) continue;
+
       const c = (line.category ?? "").trim().toLowerCase();
       if (c !== cat) continue;
 
@@ -436,38 +363,33 @@ export function calculateBaselineForProject(params: {
 
       const explicit = safeNum(line.line_total) || safeNum(line.total);
       const unitPrice = safeNum(line.unit_price);
-      const s = explicit > 0 ? explicit : (unitPrice > 0 ? q * unitPrice : 0);
+      const s = explicit > 0 ? explicit : unitPrice > 0 ? q * unitPrice : 0;
 
       qty += q;
       spend += s;
     }
 
     if (qty > 0 && spend >= 0) {
-      const avgUnitPrice = qty > 0 ? spend / qty : 0;
-
+      const avgUnitPrice = spend / qty;
       const qtyReduced = qty * reductionRate;
-      const annualCostSavingsNok = qtyReduced * avgUnitPrice;
-
-      const annualCo2SavingsKg = qtyReduced * model.emissionFactorKgCo2PerUnit;
 
       return {
         baselineSpendNok: spend,
         baselineQuantity: qty,
         baselineUnit: model.unit,
-        annualCostSavingsNok,
-        annualCo2SavingsKg,
+        annualCostSavingsNok: qtyReduced * avgUnitPrice,
+        annualCo2SavingsKg: qtyReduced * model.emissionFactorKgCo2PerUnit,
         dataSource: "invoice_lines",
       };
     }
   }
 
-  // 3) Fallback: invoices spend+co2 (vendor-filter only)
-  // If we don't have quantity/unit lines, we still can do % reduction on spend and CO2
+  // 2) Fallback: invoices spend+co2 (vendor-filtered)
   let spend2 = 0;
   let co22 = 0;
 
-  for (const invId of invoiceIdSet) {
-    const inv = invoiceById[invId];
+  for (const id of invoiceIdSet) {
+    const inv = invoiceById[id];
     spend2 += safeNum(inv.amount_nok);
     co22 += safeNum(inv.total_co2_kg);
   }
