@@ -16,10 +16,11 @@ function toNumber(input: unknown): number {
   if (input === null || input === undefined) return 0;
   if (typeof input === "number" && Number.isFinite(input)) return input;
 
-  // håndter numeric som string, og evt norsk komma
+  // numeric kan komme som string
   const s = String(input).trim();
   if (!s) return 0;
 
+  // tåler også norsk komma hvis det skulle dukke opp
   const normalized = s.replace(/\s/g, "").replace(/\./g, "").replace(/,/g, ".");
   const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
@@ -49,23 +50,18 @@ export default function ESGPage() {
       setError(null);
       setLoading(true);
 
-      // ✅ HER: vi henter amount (riktig kolonne hos deg)
+      // ✅ Bruker riktig kolonne: amount_nok
       const { data, error } = await supabase
         .from("invoices")
-        .select("id, vendor, amount, total, total_co2_kg, co2_kg, scope")
+        .select("id, vendor, amount_nok, total_co2_kg, scope")
         .eq("org_id", ACTIVE_ORG_ID);
 
       if (error) throw error;
 
       const mapped: Row[] = (data ?? []).map((r: any) => {
         const vendor = (r.vendor ?? "Ukjent").toString().trim() || "Ukjent";
-
-        // ✅ Beløp: bruk amount først, fallback til total hvis den finnes
-        const amountNok = toNumber(r.amount) || toNumber(r.total) || 0;
-
-        // ✅ CO2: prøv begge
-        const co2Kg = toNumber(r.total_co2_kg) || toNumber(r.co2_kg) || 0;
-
+        const amountNok = toNumber(r.amount_nok);
+        const co2Kg = toNumber(r.total_co2_kg);
         const scope = (r.scope ?? null) as string | null;
 
         return {
@@ -103,10 +99,10 @@ export default function ESGPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Akkumulering: dette summerer alle rows
+  // ✅ Akkumulerer totals
   const metrics = useMemo(() => {
     const base = rows.map((r) => ({
-      total: r.amountNok, // send inn beløpet som "total" til calculateFinanceMetrics
+      total: r.amountNok,
       total_co2_kg: r.co2Kg,
     }));
     return calculateFinanceMetrics(base);
@@ -226,7 +222,7 @@ export default function ESGPage() {
         </div>
 
         <div className="mt-3 text-xs text-neutral-500">
-          Nå summerer vi <code>amount</code> (fallback <code>total</code>) fra <code>invoices</code>.
+          Bruker <code>amount_nok</code> + <code>total_co2_kg</code> fra <code>invoices</code>.
         </div>
       </section>
     </div>
