@@ -1,192 +1,88 @@
-// src/components/InvoiceUpload.tsx
-import React, { useState } from "react";
-import { processInvoiceUpload } from "../lib/processInvoiceUpload";
+// src/lib/processInvoiceUpload.ts
+import { runExternalOcr } from "./externalOcr";
+import parseInvoice from "./invoiceParser";
+import saveDocumentLinesWithCo2 from "./saveDocumentLinesWithCo2";
+import { estimateInvoiceEmissionsKg } from "./estimateEmissions";
 
-type FileStatus = "pending" | "processing" | "done" | "error";
+// Hvis du har parseInvoiceLines.ts (du har den i repo), prøver vi å bruke den.
+// Hvis ikke, faller vi tilbake uten å kræsje.
+let parseInvoiceLinesSafe: ((raw: any) => any[]) | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const mod = require("./parseInvoiceLines");
+  parseInvoiceLinesSafe = mod?.parseInvoiceLines ?? null;
+} catch {
+  parseInvoiceLinesSafe = null;
+}
 
-type UploadItem = {
-  id: string;
+export type ProcessInvoiceArgs = {
   file: File;
-  name: string;
-  status: FileStatus;
-  progress: number; // 0-100
-  message?: string;
+  publicUrl?: string | null;
 };
 
-export default function InvoiceUpload() {
-  const [items, setItems] = useState<UploadItem[]>([]);
-  const [isProcessingAll, setIsProcessingAll] = useState(false);
+export type ProcessInvoiceResult = {
+  invoiceId: string;
+  vendor: string | null;
+  amountNok: number;
+  totalCo2Kg: number;
+  linesCount: number;
+};
 
-  function addFiles(files: FileList | File[]) {
-    const arr = Array.from(files);
-    const mapped: UploadItem[] = arr.map((file) => ({
-      id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
-      file,
-      name: file.name,
-      status: "pending",
-      progress: 0,
-    }));
-    setItems((prev) => [...mapped, ...prev]);
+function safeNum(x: any): number {
+  const v = typeof x === "number" ? x : Number(x);
+  return Number.isFinite(v) ? v : 0;
+}
+
+export default async function processInvoiceUpload(args: ProcessInvoiceArgs): Promise<ProcessInvoiceResult> {
+  // 1) OCR via /api/azure-ocr -> Azure DI
+  const ocr = await runExternalOcr(args.file);
+  if (!ocr.ok) {
+    throw new Error(ocr.message || "OCR failed");
   }
 
-  async function processOne(itemId: string) {
-    const item = items.find((x) => x.id === itemId);
-    if (!item) return;
+  const raw = ocr.raw;
 
-    setItems((prev) =>
-      prev.map((x) => (x.id === itemId ? { ...x, status: "processing", progress: 10, message: "Analyzing…" } : x))
-    );
+  // 2) Parse invoice header totals/vendor/etc (din eksisterende parser)
+  const parsed = parseInvoice(raw);
 
-    try {
-      // This calls OCR + parsing + CO2 + save invoice + save lines
-      const res = await processInvoiceUpload(item.file);
+  const vendor = parsed?.vendor ?? parsed?.supplier ?? null;
 
-      setItems((prev) =>
-        prev.map((x) =>
-          x.id === itemId
-            ? {
-                ...x,
-                status: "done",
-                progress: 100,
-                message: `Saved to database — Beløp: ${res.amountNok?.toFixed?.(2) ?? res.amountNok} NOK · CO₂: ${
-                  res.totalCo2Kg?.toFixed?.(1) ?? res.totalCo2Kg
-                } kg · Lines: ${res.linesCount}`,
-              }
-            : x
-        )
-      );
-    } catch (e: any) {
-      const msg = e?.message ?? JSON.stringify(e);
-
-      setItems((prev) =>
-        prev.map((x) =>
-          x.id === itemId
-            ? {
-                ...x,
-                status: "error",
-                progress: 100,
-                message: msg,
-              }
-            : x
-        )
-      );
-    }
-  }
-
-  async function processAll() {
-    setIsProcessingAll(true);
-    try {
-      // process in sequence to avoid rate-limit (429)
-      for (const it of items) {
-        if (it.status === "done") continue;
-        await processOne(it.id);
-      }
-    } finally {
-      setIsProcessingAll(false);
-    }
-  }
-
-  function removeOne(itemId: string) {
-    setItems((prev) => prev.filter((x) => x.id !== itemId));
-  }
-
-  function clearDone() {
-    setItems((prev) => prev.filter((x) => x.status !== "done"));
-  }
-
-  return (
-    <div className="rounded-2xl border bg-white shadow-sm p-4 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-lg font-semibold">Last opp fakturaer</div>
-          <div className="text-sm text-neutral-600">PDF eller bilde. Vi kjører OCR → lagrer invoices + invoice_lines.</div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            className="rounded-xl border px-3 py-2 text-sm font-medium hover:bg-neutral-50"
-            onClick={clearDone}
-            disabled={items.every((x) => x.status !== "done")}
-          >
-            Fjern ferdige
-          </button>
-
-          <button
-            className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
-            onClick={processAll}
-            disabled={isProcessingAll || items.length === 0}
-          >
-            {isProcessingAll ? "Prosesserer…" : "Prosesser alle"}
-          </button>
-        </div>
-      </div>
-
-      <label className="block">
-        <input
-          type="file"
-          multiple
-          accept="application/pdf,image/*"
-          onChange={(e) => {
-            if (e.target.files) addFiles(e.target.files);
-            e.currentTarget.value = "";
-          }}
-        />
-      </label>
-
-      {items.length === 0 ? (
-        <div className="text-sm text-neutral-600">Ingen filer i kø.</div>
-      ) : (
-        <div className="space-y-3">
-          {items.map((it) => (
-            <div key={it.id} className="rounded-xl border p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-medium truncate">{it.name}</div>
-                  <div className="text-xs text-neutral-600">
-                    Status:{" "}
-                    {it.status === "pending"
-                      ? "Klar"
-                      : it.status === "processing"
-                      ? "Prosesserer"
-                      : it.status === "done"
-                      ? "Ferdig"
-                      : "Feil"}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    className="rounded-lg border px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-60"
-                    onClick={() => processOne(it.id)}
-                    disabled={isProcessingAll || it.status === "processing"}
-                  >
-                    Kjør
-                  </button>
-
-                  <button
-                    className="rounded-lg border px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-60"
-                    onClick={() => removeOne(it.id)}
-                    disabled={it.status === "processing"}
-                  >
-                    Fjern
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-2 h-2 w-full rounded-full bg-neutral-100 overflow-hidden">
-                <div
-                  className={`h-full ${
-                    it.status === "error" ? "bg-red-500" : it.status === "done" ? "bg-emerald-500" : "bg-emerald-400"
-                  }`}
-                  style={{ width: `${it.progress}%` }}
-                />
-              </div>
-
-              {it.message ? <div className="mt-2 text-xs text-neutral-700 whitespace-pre-wrap">{it.message}</div> : null}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+  // VIKTIG: dere bruker amount_nok i DB og i ESG
+  const amountNok = safeNum(
+    parsed?.amount_nok ??
+      parsed?.amountNok ??
+      parsed?.total ??
+      parsed?.invoiceTotal ??
+      0
   );
+
+  // 3) Parse lines (qty/unit/category) hvis mulig
+  const lines = parseInvoiceLinesSafe ? parseInvoiceLinesSafe(raw) : (parsed?.lines ?? []);
+
+  // 4) CO2 (bruker deres estimator)
+  const totalCo2Kg = safeNum(
+    parsed?.total_co2_kg ?? parsed?.totalCo2Kg ?? estimateInvoiceEmissionsKg({ amountNok, vendor: vendor ?? "", lines })
+  );
+
+  // 5) Save invoice + lines
+  const saved = await saveDocumentLinesWithCo2({
+    vendor,
+    invoice_no: parsed?.invoice_no ?? parsed?.invoiceNo ?? null,
+    invoice_date: parsed?.invoice_date ?? parsed?.invoiceDate ?? null,
+    currency: parsed?.currency ?? "NOK",
+    amount_nok: amountNok,
+    total_co2_kg: totalCo2Kg,
+    public_url: args.publicUrl ?? null,
+    status: "ok",
+    scope: "Scope 3",
+    lines: Array.isArray(lines) ? lines : [],
+  });
+
+  return {
+    invoiceId: saved.invoiceId,
+    vendor,
+    amountNok,
+    totalCo2Kg,
+    linesCount: Array.isArray(lines) ? lines.length : 0,
+  };
 }
