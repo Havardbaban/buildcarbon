@@ -2,7 +2,6 @@
 import { supabase } from "./supabase";
 import { ACTIVE_ORG_ID } from "./org";
 
-// Vi er fleksible på line-format, siden dere har varierende parser
 export type SaveLine = {
   description?: string | null;
   category?: string | null;
@@ -19,7 +18,7 @@ export type SaveInvoiceArgs = {
   invoice_date: string | null;
   currency: string | null;
 
-  amount_nok: number; // totalsum i NOK
+  amount_nok: number;
   total_co2_kg: number;
 
   public_url?: string | null;
@@ -35,8 +34,7 @@ function n(x: any): number | null {
 }
 
 /**
- * ✅ Default export (for import saveDocumentLinesWithCo2 from ...)
- * ✅ Named export (for import { saveDocumentLinesWithCo2 } from ...)
+ * ✅ Default export (matches: import saveDocumentLinesWithCo2 from "./saveDocumentLinesWithCo2")
  */
 export default async function saveDocumentLinesWithCo2(args: SaveInvoiceArgs) {
   // 1) Insert invoice
@@ -83,12 +81,9 @@ export default async function saveDocumentLinesWithCo2(args: SaveInvoiceArgs) {
   return { invoiceId };
 }
 
-// Named export too
-export async function saveDocumentLinesWithCo2(args: SaveInvoiceArgs) {
-  return saveDocumentLinesWithCo2Default(args);
-}
-
-// helper to call default from named without recursion
-async function saveDocumentLinesWithCo2Default(args: SaveInvoiceArgs) {
-  return (await (await import("./saveDocumentLinesWithCo2")).default)(args);
-}
+/**
+ * Optional named export with a DIFFERENT name (no collision)
+ * Use only if you need it somewhere:
+ * import { saveDocumentLinesWithCo2Named } from "./saveDocumentLinesWithCo2";
+ */
+export const saveDocumentLinesWithCo2Named = saveDocumentLinesWithCo2;
