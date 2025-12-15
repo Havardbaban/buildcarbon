@@ -2,19 +2,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { ACTIVE_ORG_ID } from "../lib/org";
-import {
-  SHADOW_PRICE_PER_TONN_NOK,
-  calculateProjectMetrics,
-  calculateBaselineForProject,
-  fmtNok,
-  fmtNumber,
-  type InvoiceRow,
-  type InvoiceLineRow,
-  type ProjectInput,
-} from "../lib/finance";
+import { SHADOW_PRICE_PER_TONN_NOK, calculateProjectMetrics, fmtNok, fmtNumber } from "../lib/finance";
+import { getBaselineForProject, BaselineResult } from "../lib/baseline";
 
 type ProjectRow = {
   id: string;
+  org_id: string;
+
   title: string;
   description: string | null;
   category: string | null;
@@ -24,7 +18,6 @@ type ProjectRow = {
   capex_nok: number;
   opex_annual_nok: number;
   expected_reduction_rate: number;
-
   lifetime_years: number;
   discount_rate: number;
   carbon_price_per_ton_nok: number;
@@ -32,21 +25,31 @@ type ProjectRow = {
   baseline_months: number;
   vendor_filter: string | null;
 
-  use_overrides: boolean;
-  annual_cost_savings_override_nok: number;
-  annual_co2_savings_override_kg: number;
+  use_override: boolean;
+  override_annual_cost_saving_nok: number | null;
+  override_annual_co2_saving_kg: number | null;
 
   created_at: string;
 };
 
-export default function ProjectsPage() {
-  const [projects, setProjects] = useState<ProjectRow[]>([]);
-  const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
-  const [lines, setLines] = useState<InvoiceLineRow[]>([]);
+type ProjectView = {
+  row: ProjectRow;
+  baseline: BaselineResult;
+  metrics: ReturnType<typeof calculateProjectMetrics>;
+};
 
+function safeNum(x: any): number {
+  const v = typeof x === "number" ? x : Number(x);
+  return Number.isFinite(v) ? v : 0;
+}
+
+export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [projects, setProjects] = useState<ProjectView[]>([]);
+
+  // create form
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -60,95 +63,58 @@ export default function ProjectsPage() {
     carbon_price_per_ton_nok: SHADOW_PRICE_PER_TONN_NOK,
     baseline_months: 12,
     vendor_filter: "",
-    use_overrides: false,
-    annual_cost_savings_override_nok: 0,
-    annual_co2_savings_override_kg: 0,
+    use_override: false,
+    override_annual_cost_saving_nok: 0,
+    override_annual_co2_saving_kg: 0,
   });
 
-  async function loadAll() {
+  async function load() {
     try {
       setError(null);
       setLoading(true);
 
-      const { data: pData, error: pErr } = await supabase
+      const { data, error } = await supabase
         .from("measures_projects")
-        .select(
-          "id, title, description, category, vendor, status, capex_nok, opex_annual_nok, expected_reduction_rate, lifetime_years, discount_rate, carbon_price_per_ton_nok, baseline_months, vendor_filter, use_overrides, annual_cost_savings_override_nok, annual_co2_savings_override_kg, created_at"
-        )
+        .select("*")
         .eq("org_id", ACTIVE_ORG_ID)
         .order("created_at", { ascending: false });
 
-      if (pErr) throw pErr;
+      if (error) throw error;
 
-      const mappedProjects: ProjectRow[] = (pData ?? []).map((r: any) => ({
-        id: String(r.id),
-        title: String(r.title ?? ""),
-        description: r.description ?? null,
-        category: r.category ?? null,
-        vendor: r.vendor ?? null,
-        status: String(r.status ?? "draft"),
+      const rows: ProjectRow[] = (data ?? []) as any;
 
-        capex_nok: Number(r.capex_nok ?? 0),
-        opex_annual_nok: Number(r.opex_annual_nok ?? 0),
-        expected_reduction_rate: Number(r.expected_reduction_rate ?? 0.1),
+      // Compute baseline + metrics per project
+      const views: ProjectView[] = [];
+      for (const r of rows) {
+        const baseline = await getBaselineForProject({
+          category: r.category ?? "other",
+          baselineMonths: r.baseline_months ?? 12,
+          vendorFilter: (r.vendor_filter ?? "").trim() || null,
+        });
 
-        lifetime_years: Number(r.lifetime_years ?? 5),
-        discount_rate: Number(r.discount_rate ?? 0.08),
-        carbon_price_per_ton_nok: Number(r.carbon_price_per_ton_nok ?? SHADOW_PRICE_PER_TONN_NOK),
+        const metrics = calculateProjectMetrics(baseline.source, {
+          capex_nok: safeNum(r.capex_nok),
+          opex_annual_nok: safeNum(r.opex_annual_nok),
+          expected_reduction_rate: safeNum(r.expected_reduction_rate),
+          lifetime_years: safeNum(r.lifetime_years),
+          discount_rate: safeNum(r.discount_rate),
+          carbon_price_per_ton_nok: safeNum(r.carbon_price_per_ton_nok),
 
-        baseline_months: Number(r.baseline_months ?? 12),
-        vendor_filter: r.vendor_filter ?? null,
+          baseline_months: baseline.months,
+          baseline_spend_period_nok: baseline.spendNok_period,
+          baseline_co2_period_kg: baseline.co2Kg_period,
+          baseline_quantity_period: baseline.quantity_period,
+          baseline_unit: baseline.unit,
 
-        use_overrides: Boolean(r.use_overrides ?? false),
-        annual_cost_savings_override_nok: Number(r.annual_cost_savings_override_nok ?? 0),
-        annual_co2_savings_override_kg: Number(r.annual_co2_savings_override_kg ?? 0),
+          use_override: !!r.use_override,
+          override_annual_cost_saving_nok: r.override_annual_cost_saving_nok,
+          override_annual_co2_saving_kg: r.override_annual_co2_saving_kg,
+        });
 
-        created_at: String(r.created_at ?? ""),
-      }));
-
-      const { data: iData, error: iErr } = await supabase
-        .from("invoices")
-        .select("id, vendor, amount_nok, total_co2_kg, invoice_date, created_at")
-        .eq("org_id", ACTIVE_ORG_ID);
-
-      if (iErr) throw iErr;
-
-      const mappedInvoices: InvoiceRow[] = (iData ?? []).map((r: any) => ({
-        id: String(r.id),
-        vendor: r.vendor ?? null,
-        amount_nok: typeof r.amount_nok === "number" ? r.amount_nok : Number(r.amount_nok ?? 0),
-        total_co2_kg: typeof r.total_co2_kg === "number" ? r.total_co2_kg : Number(r.total_co2_kg ?? 0),
-        invoice_date: r.invoice_date ?? null,
-        created_at: r.created_at ?? null,
-      }));
-
-      const invoiceIds = mappedInvoices.map((x) => x.id);
-      let mappedLines: InvoiceLineRow[] = [];
-
-      if (invoiceIds.length > 0) {
-        const { data: lData, error: lErr } = await supabase
-          .from("invoice_lines")
-          .select("invoice_id, category, quantity, unit, unit_price, line_total, total")
-          .in("invoice_id", invoiceIds);
-
-        if (lErr) {
-          console.warn("invoice_lines load failed:", lErr);
-        } else {
-          mappedLines = (lData ?? []).map((r: any) => ({
-            invoice_id: String(r.invoice_id),
-            category: r.category ?? null,
-            quantity: r.quantity == null ? null : Number(r.quantity),
-            unit: r.unit ?? null,
-            unit_price: r.unit_price == null ? null : Number(r.unit_price),
-            line_total: r.line_total == null ? null : Number(r.line_total),
-            total: r.total == null ? null : Number(r.total),
-          }));
-        }
+        views.push({ row: r, baseline, metrics });
       }
 
-      setProjects(mappedProjects);
-      setInvoices(mappedInvoices);
-      setLines(mappedLines);
+      setProjects(views);
     } catch (e: any) {
       setError(e?.message ?? "Ukjent feil");
     } finally {
@@ -156,359 +122,329 @@ export default function ProjectsPage() {
     }
   }
 
-  async function createProject() {
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function createProject(e: React.FormEvent) {
+    e.preventDefault();
     try {
       setError(null);
 
-      const payload = {
+      const payload: any = {
         org_id: ACTIVE_ORG_ID,
-        title: form.title.trim() || "Nytt tiltak",
-        description: form.description.trim() || null,
-        category: form.category || null,
-        vendor: form.vendor.trim() || null,
+        title: form.title,
+        description: form.description || null,
+        category: form.category,
+        vendor: form.vendor || null,
         status: "draft",
+        capex_nok: safeNum(form.capex_nok),
+        opex_annual_nok: safeNum(form.opex_annual_nok),
+        expected_reduction_rate: safeNum(form.expected_reduction_rate),
+        lifetime_years: Math.round(safeNum(form.lifetime_years)),
+        discount_rate: safeNum(form.discount_rate),
+        carbon_price_per_ton_nok: safeNum(form.carbon_price_per_ton_nok),
 
-        capex_nok: Number(form.capex_nok ?? 0),
-        opex_annual_nok: Number(form.opex_annual_nok ?? 0),
-        expected_reduction_rate: Number(form.expected_reduction_rate ?? 0.1),
+        baseline_months: Math.round(safeNum(form.baseline_months)),
+        vendor_filter: form.vendor_filter?.trim() || null,
 
-        lifetime_years: Number(form.lifetime_years ?? 5),
-        discount_rate: Number(form.discount_rate ?? 0.08),
-        carbon_price_per_ton_nok: Number(form.carbon_price_per_ton_nok ?? SHADOW_PRICE_PER_TONN_NOK),
-
-        baseline_months: Number(form.baseline_months ?? 12),
-        vendor_filter: form.vendor_filter.trim() || null,
-
-        use_overrides: Boolean(form.use_overrides),
-        annual_cost_savings_override_nok: Number(form.annual_cost_savings_override_nok ?? 0),
-        annual_co2_savings_override_kg: Number(form.annual_co2_savings_override_kg ?? 0),
+        use_override: !!form.use_override,
+        override_annual_cost_saving_nok: form.use_override ? safeNum(form.override_annual_cost_saving_nok) : null,
+        override_annual_co2_saving_kg: form.use_override ? safeNum(form.override_annual_co2_saving_kg) : null,
       };
 
       const { error } = await supabase.from("measures_projects").insert(payload);
       if (error) throw error;
 
-      setForm((f) => ({
-        ...f,
+      setForm((p) => ({
+        ...p,
         title: "",
         description: "",
-        vendor: "",
-        vendor_filter: "",
-        use_overrides: false,
-        annual_cost_savings_override_nok: 0,
-        annual_co2_savings_override_kg: 0,
       }));
 
-      await loadAll();
+      await load();
     } catch (e: any) {
       setError(e?.message ?? "Kunne ikke opprette tiltak");
     }
   }
 
   async function deleteProject(id: string) {
-    const ok = window.confirm("Er du sikker på at du vil slette dette tiltaket?\nDette kan ikke angres.");
-    if (!ok) return;
-
     try {
       setError(null);
-
-      const { error } = await supabase
-        .from("measures_projects")
-        .delete()
-        .eq("id", id)
-        .eq("org_id", ACTIVE_ORG_ID);
-
+      const { error } = await supabase.from("measures_projects").delete().eq("id", id).eq("org_id", ACTIVE_ORG_ID);
       if (error) throw error;
-
-      await loadAll();
+      await load();
     } catch (e: any) {
-      setError(e?.message ?? "Kunne ikke slette tiltak");
+      setError(e?.message ?? "Kunne ikke slette");
     }
   }
 
-  useEffect(() => {
-    loadAll();
-
-    const ch = supabase
-      .channel("projects-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "measures_projects" }, loadAll)
-      .on("postgres_changes", { event: "*", schema: "public", table: "invoices" }, loadAll)
-      .on("postgres_changes", { event: "*", schema: "public", table: "invoice_lines" }, loadAll)
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(ch);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const computed = useMemo(() => {
-    return projects.map((p) => {
-      const baseline = calculateBaselineForProject({
-        project: {
-          category: p.category,
-          expected_reduction_rate: p.expected_reduction_rate,
-          carbon_price_per_ton_nok: p.carbon_price_per_ton_nok,
-          baseline_months: p.baseline_months,
-          vendor_filter: p.vendor_filter,
-          use_overrides: p.use_overrides,
-          annual_cost_savings_override_nok: p.annual_cost_savings_override_nok,
-          annual_co2_savings_override_kg: p.annual_co2_savings_override_kg,
-        },
-        invoices,
-        lines,
-      });
-
-      const input: ProjectInput = {
-        capexNok: p.capex_nok,
-        opexAnnualNok: p.opex_annual_nok,
-        annualCostSavingsNok: baseline.annualCostSavingsNok,
-        annualCo2SavingsKg: baseline.annualCo2SavingsKg,
-        carbonPricePerTonNok: p.carbon_price_per_ton_nok,
-        lifetimeYears: p.lifetime_years,
-        discountRate: p.discount_rate,
-      };
-
-      const m = calculateProjectMetrics(input);
-
-      return { p, baseline, m };
-    });
-  }, [projects, invoices, lines]);
-
-  if (loading) return <div className="p-6">Laster tiltak/ROI…</div>;
-  if (error) return <div className="p-6 text-red-600">Feil: {error}</div>;
+  const categories = useMemo(
+    () => [
+      { value: "electricity", label: "electricity" },
+      { value: "fuel", label: "fuel" },
+      { value: "transport", label: "transport" },
+      { value: "waste", label: "waste" },
+      { value: "other", label: "other" },
+    ],
+    []
+  );
 
   return (
-    <div className="p-6 space-y-6">
-      <header className="space-y-1">
+    <div className="mx-auto max-w-6xl px-4 py-6 space-y-6">
+      <div>
         <h1 className="text-2xl font-semibold">Tiltaksprosjekter</h1>
         <p className="text-sm text-neutral-600">
           Nå kobles tiltak automatisk til faktura-baseline (invoice_lines først, fallback til invoices).
         </p>
-        <div className="text-xs text-neutral-500">
-          Debug: invoices={invoices.length} · invoice_lines={lines.length}
-        </div>
-      </header>
+      </div>
 
-      {/* Create */}
-      <section className="rounded-2xl border bg-white shadow-sm p-4 space-y-3">
+      {error ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+
+      {/* Create form */}
+      <form onSubmit={createProject} className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
         <div className="text-lg font-semibold">Legg til nytt tiltak</div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Field label="Tittel">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Tittel</div>
             <input
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               value={form.title}
-              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
               placeholder="Bytt til grønn strøm / effektivisering / …"
+              required
             />
-          </Field>
+          </div>
 
-          <Field label="Kategori (matcher invoice_lines.category)">
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Kategori (matcher invoice_lines.category)</div>
             <select
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               value={form.category}
-              onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+              onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
             >
-              <option value="electricity">electricity</option>
-              <option value="fuel">fuel</option>
-              <option value="transport">transport</option>
-              <option value="waste">waste</option>
-              <option value="other">other</option>
+              {categories.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
             </select>
-          </Field>
+          </div>
 
-          <Field label="Vendor (valgfritt, kun label)">
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Vendor (valgfritt, kun label)</div>
             <input
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               value={form.vendor}
-              onChange={(e) => setForm((f) => ({ ...f, vendor: e.target.value }))}
+              onChange={(e) => setForm((p) => ({ ...p, vendor: e.target.value }))}
               placeholder="DN Media / Hafslund / …"
             />
-          </Field>
+          </div>
+        </div>
 
-          <Field label="CAPEX (NOK)">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">CAPEX (NOK)</div>
             <input
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               type="number"
               value={form.capex_nok}
-              onChange={(e) => setForm((f) => ({ ...f, capex_nok: Number(e.target.value) }))}
+              onChange={(e) => setForm((p) => ({ ...p, capex_nok: Number(e.target.value) }))}
             />
-          </Field>
-
-          <Field label="Årlig OPEX (NOK)">
+          </div>
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Årlig OPEX (NOK)</div>
             <input
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               type="number"
               value={form.opex_annual_nok}
-              onChange={(e) => setForm((f) => ({ ...f, opex_annual_nok: Number(e.target.value) }))}
+              onChange={(e) => setForm((p) => ({ ...p, opex_annual_nok: Number(e.target.value) }))}
             />
-          </Field>
-
-          <Field label="Forventet reduksjon (0.1 = 10%)">
+          </div>
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Forventet reduksjon (0.1 = 10%)</div>
             <input
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               type="number"
               step="0.01"
               value={form.expected_reduction_rate}
-              onChange={(e) => setForm((f) => ({ ...f, expected_reduction_rate: Number(e.target.value) }))}
+              onChange={(e) => setForm((p) => ({ ...p, expected_reduction_rate: Number(e.target.value) }))}
             />
-          </Field>
+          </div>
+        </div>
 
-          <Field label="Baseline (mnd)">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Baseline (mnd)</div>
             <input
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               type="number"
               value={form.baseline_months}
-              onChange={(e) => setForm((f) => ({ ...f, baseline_months: Number(e.target.value) }))}
+              onChange={(e) => setForm((p) => ({ ...p, baseline_months: Number(e.target.value) }))}
             />
-          </Field>
-
-          <Field label="Vendor filter (fallback via invoices.vendor)">
+          </div>
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Vendor filter (fallback via invoices.vendor)</div>
             <input
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               value={form.vendor_filter}
-              onChange={(e) => setForm((f) => ({ ...f, vendor_filter: e.target.value }))}
-              placeholder="Snill match (contains) – f.eks. 'dn' eller 'hafslund'"
+              onChange={(e) => setForm((p) => ({ ...p, vendor_filter: e.target.value }))}
+              placeholder="Skriv del av vendor-navn"
             />
-          </Field>
-
-          <Field label="CO₂-pris (NOK/tonn)">
+          </div>
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">CO₂-pris (NOK/tonn)</div>
             <input
-              className="w-full rounded-xl border p-2"
+              className="w-full rounded-xl border px-3 py-2"
               type="number"
               value={form.carbon_price_per_ton_nok}
-              onChange={(e) => setForm((f) => ({ ...f, carbon_price_per_ton_nok: Number(e.target.value) }))}
+              onChange={(e) => setForm((p) => ({ ...p, carbon_price_per_ton_nok: Number(e.target.value) }))}
             />
-          </Field>
+          </div>
         </div>
 
-        <div className="rounded-xl border bg-neutral-50 p-3 space-y-2">
-          <div className="flex items-center gap-2">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Levetid (år)</div>
+            <input
+              className="w-full rounded-xl border px-3 py-2"
+              type="number"
+              value={form.lifetime_years}
+              onChange={(e) => setForm((p) => ({ ...p, lifetime_years: Number(e.target.value) }))}
+            />
+          </div>
+          <div>
+            <div className="text-xs text-neutral-600 mb-1">Diskonteringsrate (f.eks 0.08)</div>
+            <input
+              className="w-full rounded-xl border px-3 py-2"
+              type="number"
+              step="0.01"
+              value={form.discount_rate}
+              onChange={(e) => setForm((p) => ({ ...p, discount_rate: Number(e.target.value) }))}
+            />
+          </div>
+        </div>
+
+        <div className="rounded-2xl border bg-neutral-50 p-3 space-y-2">
+          <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
-              checked={form.use_overrides}
-              onChange={(e) => setForm((f) => ({ ...f, use_overrides: e.target.checked }))}
+              checked={form.use_override}
+              onChange={(e) => setForm((p) => ({ ...p, use_override: e.target.checked }))}
             />
-            <div className="text-sm font-medium">Bruk manuell overstyring (audit)</div>
-          </div>
+            Bruk manuell overstyring (audit)
+          </label>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Field label="Override: årlig kost-sparing (NOK)">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div>
+              <div className="text-xs text-neutral-600 mb-1">Override: årlig kost-sparing (NOK)</div>
               <input
-                className="w-full rounded-xl border p-2"
+                className="w-full rounded-xl border px-3 py-2"
                 type="number"
-                value={form.annual_cost_savings_override_nok}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, annual_cost_savings_override_nok: Number(e.target.value) }))
-                }
+                value={form.override_annual_cost_saving_nok}
+                onChange={(e) => setForm((p) => ({ ...p, override_annual_cost_saving_nok: Number(e.target.value) }))}
+                disabled={!form.use_override}
               />
-            </Field>
-
-            <Field label="Override: årlig CO₂-sparing (kg)">
+            </div>
+            <div>
+              <div className="text-xs text-neutral-600 mb-1">Override: årlig CO₂-sparing (kg)</div>
               <input
-                className="w-full rounded-xl border p-2"
+                className="w-full rounded-xl border px-3 py-2"
                 type="number"
-                value={form.annual_co2_savings_override_kg}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, annual_co2_savings_override_kg: Number(e.target.value) }))
-                }
+                value={form.override_annual_co2_saving_kg}
+                onChange={(e) => setForm((p) => ({ ...p, override_annual_co2_saving_kg: Number(e.target.value) }))}
+                disabled={!form.use_override}
               />
-            </Field>
+            </div>
           </div>
         </div>
 
-        <Field label="Beskrivelse (valgfritt)">
+        <div>
+          <div className="text-xs text-neutral-600 mb-1">Beskrivelse (valgfritt)</div>
           <textarea
-            className="w-full rounded-xl border p-2"
+            className="w-full rounded-xl border px-3 py-2"
             value={form.description}
-            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+            onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
             placeholder="Hva gjør tiltaket, hvorfor, antagelser…"
           />
-        </Field>
+        </div>
 
-        <button className="rounded-xl bg-emerald-600 text-white px-4 py-2 font-medium" onClick={createProject}>
+        <button className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white">
           Opprett tiltak
         </button>
-      </section>
+      </form>
 
       {/* List */}
-      <section className="space-y-3">
-        <div className="text-lg font-semibold">Tiltak (med finans)</div>
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold">Tiltak (med finans)</h2>
 
-        {computed.length === 0 ? (
-          <div className="text-sm text-neutral-600">Ingen tiltak ennå.</div>
+        {loading ? (
+          <div className="text-sm text-neutral-600">Laster…</div>
+        ) : projects.length === 0 ? (
+          <div className="text-sm text-neutral-600">Ingen tiltak enda.</div>
         ) : (
-          <div className="space-y-3">
-            {computed.map(({ p, baseline, m }) => (
-              <div key={p.id} className="rounded-2xl border bg-white shadow-sm p-4 space-y-3">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-lg font-semibold">{p.title}</div>
-                    <div className="text-sm text-neutral-600">
-                      {p.category ?? "—"} {p.vendor ? `· ${p.vendor}` : ""} · status: {p.status}
-                    </div>
-                    <div className="text-xs text-neutral-500">
-                      Baseline: {p.baseline_months} mnd · Datakilde: {baseline.dataSource}
-                    </div>
-                    <div className="text-xs text-neutral-500">
-                      Debug: invoices={invoices.length} · lines={lines.length} · vendor_filter={(p.vendor_filter ?? "—")}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col items-end gap-2">
-                    <div className="text-sm text-neutral-600">CO₂-pris: {fmtNok(p.carbon_price_per_ton_nok)} / tonn</div>
-                    <button
-                      onClick={() => deleteProject(p.id)}
-                      className="rounded-xl border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
-                    >
-                      Slett
-                    </button>
+          projects.map((p) => (
+            <div key={p.row.id} className="rounded-2xl border bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-lg font-semibold">{p.row.title}</div>
+                  <div className="text-xs text-neutral-600">
+                    {p.row.category} · status: {p.row.status} <br />
+                    Baseline: {p.baseline.months} mnd · Datakilde: {p.baseline.source} ·
+                    {p.baseline.source === "invoice_lines"
+                      ? ` linjer: ${p.baseline.linesCount}`
+                      : ` fakturaer: ${p.baseline.invoicesCount}`}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <Card title="CAPEX" value={fmtNok(p.capex_nok)} />
-                  <Card title="Årlig OPEX" value={fmtNok(p.opex_annual_nok)} />
-                  <Card title="NPV" value={fmtNok(m.npvNok)} />
-                  <Card title="Payback" value={m.paybackYears === null ? "—" : `${fmtNumber(m.paybackYears, 1)} år`} />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <Card title="Baseline spend" value={fmtNok(baseline.baselineSpendNok)} />
-                  <Card
-                    title="Baseline mengde"
-                    value={baseline.baselineUnit ? `${fmtNumber(baseline.baselineQuantity, 0)} ${baseline.baselineUnit}` : "—"}
-                  />
-                  <Card title="Årlig kost-sparing" value={fmtNok(baseline.annualCostSavingsNok)} />
-                  <Card title="Årlig CO₂-sparing" value={`${fmtNumber(baseline.annualCo2SavingsKg, 1)} kg`} />
-                </div>
-
-                <div className="text-xs text-neutral-600">
-                  Årlig skygge-sparing (CO₂ × pris) er inkludert i NPV: <b>{fmtNok(m.annualShadowSavingsNok)}</b> / år
-                </div>
+                <button
+                  className="rounded-lg border border-red-200 px-3 py-1 text-sm text-red-700 hover:bg-red-50"
+                  onClick={() => deleteProject(p.row.id)}
+                >
+                  Slett
+                </button>
               </div>
-            ))}
-          </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+                <Stat label="CAPEX" value={fmtNok(safeNum(p.row.capex_nok))} />
+                <Stat label="Årlig OPEX" value={fmtNok(safeNum(p.row.opex_annual_nok))} />
+                <Stat label="NPV" value={fmtNok(p.metrics.npvNok)} />
+                <Stat label="Payback" value={p.metrics.paybackYears == null ? "—" : `${fmtNumber(p.metrics.paybackYears, 1)} år`} />
+              </div>
+
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
+                <Stat label="Baseline spend (årlig)" value={fmtNok(p.metrics.baselineSpendAnnualNok)} />
+                <Stat
+                  label="Baseline mengde (årlig)"
+                  value={
+                    p.metrics.baselineQuantityAnnual == null
+                      ? "—"
+                      : `${fmtNumber(p.metrics.baselineQuantityAnnual, 0)} ${p.metrics.baselineUnit ?? ""}`
+                  }
+                />
+                <Stat label="Årlig kost-sparing" value={fmtNok(p.metrics.annualCostSavingNok)} />
+                <Stat label="Årlig CO₂-sparing" value={`${fmtNumber(p.metrics.annualCo2SavingKg, 0)} kg`} />
+              </div>
+
+              <div className="mt-2 text-xs text-neutral-600">
+                Årlig skygge-sparing (CO₂ × pris) er inkludert i NPV: {fmtNok(p.metrics.annualShadowSavingNok)} / år ·
+                Netto benefit: {fmtNok(p.metrics.annualNetBenefitNok)} / år
+              </div>
+            </div>
+          ))
         )}
-      </section>
+      </div>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="space-y-1">
-      <div className="text-sm text-neutral-600">{label}</div>
-      {children}
-    </div>
-  );
-}
-
-function Card({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="rounded-2xl border bg-white shadow-sm p-4">
-      <div className="text-sm text-neutral-600">{title}</div>
-      <div className="text-xl font-semibold">{value}</div>
+    <div className="rounded-2xl border p-4">
+      <div className="text-xs text-neutral-600">{label}</div>
+      <div className="mt-1 text-lg font-semibold">{value}</div>
     </div>
   );
 }
