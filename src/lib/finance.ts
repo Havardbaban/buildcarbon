@@ -223,3 +223,39 @@ export function fmtNumber(n: number, digits = 0) {
     maximumFractionDigits: digits,
   }).format(n);
 }
+// ---------------------------------------------------------------------
+// Backwards compatible exports for ESG.tsx
+// (ESG expects calculateFinanceMetrics + FinanceMetrics)
+// ---------------------------------------------------------------------
+
+export type FinanceMetrics = {
+  totalSpendNok: number;
+  totalCo2Kg: number;
+  carbonIntensityPerNokGram: number; // g CO2 / NOK
+  co2PerMillionNokTonnes: number; // tonn CO2 / MNOK
+  carbonShadowCostNok: number; // NOK
+};
+
+export function calculateFinanceMetrics(
+  rows: Array<{ total?: number | null; total_co2_kg?: number | null }>
+): FinanceMetrics {
+  const totalSpendNok = rows.reduce((sum, r) => sum + (r.total ?? 0), 0);
+  const totalCo2Kg = rows.reduce((sum, r) => sum + (r.total_co2_kg ?? 0), 0);
+
+  const carbonIntensityPerNokGram =
+    totalSpendNok > 0 ? (totalCo2Kg * 1000) / totalSpendNok : 0;
+
+  const co2PerMillionNokTonnes =
+    totalSpendNok > 0 ? (totalCo2Kg / 1000) / (totalSpendNok / 1_000_000) : 0;
+
+  const carbonShadowCostNok =
+    (totalCo2Kg / 1000) * SHADOW_PRICE_PER_TONN_NOK;
+
+  return {
+    totalSpendNok,
+    totalCo2Kg,
+    carbonIntensityPerNokGram,
+    co2PerMillionNokTonnes,
+    carbonShadowCostNok,
+  };
+}
