@@ -1,110 +1,181 @@
 // src/lib/saveDocumentLinesWithCo2.ts
+import { supabase } from "./supabase";
+import { ACTIVE_ORG_ID } from "./org";
 
-import type { ParsedInvoiceLine } from "./invoiceParser";
-
-export type RawInvoiceLine = ParsedInvoiceLine;
-
-type EmissionFactorRow = {
-  id: string;
-  name: string;
-  product_category_id: string | null;
-  co2_per_unit_kg: number | null;   // <-- matches your table column
-  source?: string | null;
+type ParsedInvoiceLine = {
+  description?: string | null;
+  quantity?: number | null;
+  unit?: string | null; // "kWh", "L", "km", "kg", etc.
+  unitPrice?: number | null; // NOK per unit
+  amount?: number | null; // line total NOK
 };
 
-function normalizeUnit(u: string | null): string | null {
+type ParsedInvoice = {
+  vendor?: string | null;
+  invoiceNo?: string | null;
+  invoiceDate?: string | null; // ISO (YYYY-MM-DD) recommended
+  currency?: string | null;
+  total?: number | null;
+  publicUrl?: string | null;
+  status?: string | null; // "processed" etc
+  scope?: string | null; // optional
+  totalCo2Kg?: number | null;
+  lines?: ParsedInvoiceLine[];
+};
+
+function normUnit(u?: string | null) {
   if (!u) return null;
-  const x = u.toLowerCase();
-  if (x === "l" || x.startsWith("liter") || x.startsWith("litre")) return "liter";
-  if (x === "stk" || x === "st" || x === "pcs" || x === "pc") return "piece";
-  if (x === "kg") return "kg";
-  if (x === "m3" || x === "m³") return "m3";
-  return x;
+  const s = u.trim().toLowerCase();
+  if (s === "kwh") return "kWh";
+  if (s === "l" || s === "liter" || s === "litre") return "L";
+  if (s === "km" || s === "kilometer") return "km";
+  if (s === "kg") return "kg";
+  if (s === "tonn" || s === "t" || s === "ton") return "t";
+  return u.trim();
 }
 
-function pickFactor(factors: EmissionFactorRow[], description: string): EmissionFactorRow | null {
-  const d = description.toLowerCase();
+function safeNum(n: any): number | null {
+  if (n === null || n === undefined) return null;
+  const x = typeof n === "number" ? n : Number(n);
+  return Number.isFinite(x) ? x : null;
+}
 
-  const findBy = (keyword: string) =>
-    factors.find(f => f.name.toLowerCase().includes(keyword));
+/**
+ * Grov, men effektiv kategori-mapping for pilot:
+ * - Bruk vendor + linjetekst for å finne category
+ * - Returnerer: electricity | fuel | transport | waste | null
+ */
+function inferCategory(vendor?: string | null, lineDesc?: string | null) {
+  const v = (vendor ?? "").toLowerCase();
+  const d = (lineDesc ?? "").toLowerCase();
+  const text = `${v} ${d}`;
 
-  if (d.includes("diesel")) return findBy("diesel fuel") || findBy("diesel");
-  if (d.includes("fuel")) return findBy("fuel") || findBy("diesel");
-  if (d.includes("fries") || d.includes("pommes")) return findBy("frozen fries") || findBy("fries");
-  if (d.includes("laptop") || d.includes("pc")) return findBy("laptop") || findBy("computer");
-  if (d.includes("electricity") || d.includes("strøm") || d.includes("strom"))
-    return findBy("electricity") || findBy("power");
+  // Electricity
+  if (
+    text.includes("strøm") ||
+    text.includes("elektr") ||
+    text.includes("electric") ||
+    text.includes("power") ||
+    text.includes("nettlei") ||
+    text.includes("kwh")
+  ) {
+    return "electricity";
+  }
+
+  // Fuel
+  if (
+    text.includes("drivstoff") ||
+    text.includes("diesel") ||
+    text.includes("bensin") ||
+    text.includes("gasoline") ||
+    text.includes("fuel") ||
+    text.includes("liter") ||
+    text.includes(" l ") ||
+    v.includes("circle k") ||
+    v.includes("esso") ||
+    v.includes("shell") ||
+    v.includes("st1")
+  ) {
+    return "fuel";
+  }
+
+  // Transport
+  if (
+    text.includes("frakt") ||
+    text.includes("shipping") ||
+    text.includes("transport") ||
+    text.includes("bring") ||
+    text.includes("posten") ||
+    text.includes("dhl") ||
+    text.includes("fedex") ||
+    text.includes("ups") ||
+    text.includes("km")
+  ) {
+    return "transport";
+  }
+
+  // Waste
+  if (
+    text.includes("avfall") ||
+    text.includes("waste") ||
+    text.includes("gjenvinning") ||
+    text.includes("recycle")
+  ) {
+    return "waste";
+  }
 
   return null;
 }
 
-export async function saveDocumentLinesWithCo2(
-  supabase: any,
-  documentId: string,
-  lines: RawInvoiceLine[]
-): Promise<void> {
-  if (!documentId) throw new Error("documentId is required");
-  if (!lines || lines.length === 0) return;
+/**
+ * Lagrer invoice + lines (med nye felt)
+ * Returnerer invoiceId (uuid)
+ */
+export async function saveDocumentLinesWithCo2(parsed: ParsedInvoice) {
+  const vendor = (parsed.vendor ?? "Ukjent").trim() || "Ukjent";
 
-  // Load emission factors once.
-  // We only select columns that we know exist in your table.
-  const { data: factors, error: factorsError } = await supabase
-    .from("emission_factor")
-    .select<EmissionFactorRow[]>("id, name, product_category_id, co2_per_unit_kg, source");
+  // 1) Insert invoice
+  const invoiceInsert = {
+    org_id: ACTIVE_ORG_ID,
+    vendor,
+    invoice_no: parsed.invoiceNo ?? null,
+    invoice_date: parsed.invoiceDate ?? null,
+    currency: parsed.currency ?? "NOK",
+    total: safeNum(parsed.total) ?? 0,
+    total_co2_kg: safeNum(parsed.totalCo2Kg) ?? 0,
+    public_url: parsed.publicUrl ?? null,
+    status: parsed.status ?? "processed",
+    scope: parsed.scope ?? null,
+  };
 
-  if (factorsError) {
-    console.error("Failed to fetch emission_factor rows:", factorsError);
-    throw factorsError;
-  }
+  const { data: inv, error: invErr } = await supabase
+    .from("invoices")
+    .insert(invoiceInsert)
+    .select("id")
+    .single();
 
-  const rowsToInsert: any[] = [];
+  if (invErr) throw invErr;
 
-  for (const line of lines) {
-    const unitNormalized = normalizeUnit(line.unitRaw ?? null);
-    const quantity = line.quantity ?? null;
+  const invoiceId: string = inv.id;
 
-    let co2_kg: number | null = null;
-    let co2_source: string | null = null;
-    let product_category_id: string | null = null;
-    let emission_factor_id: string | null = null;
+  // 2) Insert lines
+  const rawLines = parsed.lines ?? [];
+  if (rawLines.length > 0) {
+    const lineRows = rawLines.map((ln) => {
+      const quantity = safeNum(ln.quantity);
+      const unit = normUnit(ln.unit);
+      const amount = safeNum(ln.amount);
 
-    const ef = pickFactor(factors || [], line.description);
+      // unit_price: bruk OCR hvis finnes; ellers regn fra amount/quantity når mulig
+      const unitPriceFromOcr = safeNum(ln.unitPrice);
+      const computedUnitPrice =
+        unitPriceFromOcr ??
+        (quantity && quantity > 0 && amount !== null ? amount / quantity : null);
 
-    if (ef && quantity != null && ef.co2_per_unit_kg != null) {
-      co2_kg = quantity * ef.co2_per_unit_kg;
-      co2_source = ef.source ?? `Generic factor: ${ef.name}`;
-      product_category_id = ef.product_category_id;
-      emission_factor_id = ef.id;
-    }
+      const category = inferCategory(vendor, ln.description ?? null);
 
-    rowsToInsert.push({
-      document_id: documentId,
+      return {
+        invoice_id: invoiceId,
+        description: ln.description ?? null,
 
-      // basic invoice columns
-      description: line.description,
-      quantity,
-      unit: unitNormalized ?? line.unitRaw ?? null,
+        // Linjetotal (NB: sørg for at invoice_lines faktisk har kolonnen "total"
+        // Hvis dere bruker "line_total" i DB, bytt "total" til "line_total" her
+        total: amount ?? 0,
 
-      // normalized fields (your table may ignore extra columns if they don't exist)
-      unit_raw: line.unitRaw ?? null,
-      unit_normalized: unitNormalized,
-      quantity_normalized: quantity,
-
-      product_category_id,
-      emission_factor_id,
-      co2_kg,
-      co2_source,
+        // nye felt
+        category,
+        quantity: quantity ?? null,
+        unit: unit ?? null,
+        unit_price: computedUnitPrice ?? null,
+      };
     });
+
+    const { error: lineErr } = await supabase
+      .from("invoice_lines")
+      .insert(lineRows);
+
+    if (lineErr) throw lineErr;
   }
 
-  const { error: insertError } = await supabase
-    .from("document_line")
-    .insert(rowsToInsert);
-
-  if (insertError) {
-    console.error("Failed to insert document_line rows:", insertError);
-    throw insertError;
-  }
+  return invoiceId;
 }
-
-export default saveDocumentLinesWithCo2;
