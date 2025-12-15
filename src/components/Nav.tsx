@@ -29,50 +29,54 @@ export default function Nav() {
 
         {/* Midt: hovedmeny */}
         <nav className="hidden items-center gap-2 md:flex">
-          {/* Fakturaer = Last opp + Dokumenter på samme side */}
+          {/* Fakturaer */}
           <Link className={linkClass("/invoices")} to="/invoices">
             Fakturaer
           </Link>
 
-          {/* Tiltak */}
+          {/* Tiltak (scenario + sparing) */}
           <Link className={linkClass("/measures")} to="/measures">
             Tiltak
           </Link>
 
-          {/* Dashboard (finans) */}
+          {/* Prosjekter (CAPEX / ROI / NPV) */}
+          <Link className={linkClass("/projects")} to="/projects">
+            Prosjekter
+          </Link>
+
+          {/* Dashboard */}
           <Link className={linkClass("/dashboard")} to="/dashboard">
             Dashboard
           </Link>
 
-          {/* ESG (scope 1–3 + score) */}
+          {/* ESG */}
           <Link className={linkClass("/esg")} to="/esg">
             ESG
           </Link>
         </nav>
 
-        {/* Høyre: org + demo/benchmark (deaktiverte) */}
+        {/* Høyre: org / demo / benchmark */}
         <div className="flex items-center gap-3">
-          <div className="flex flex-col items-end">
+          <div className="flex items-center gap-2">
             <span className="text-xs text-slate-500">Aktiv org</span>
-            <span className="text-xs font-medium text-slate-800">
-              Demo Org ({ACTIVE_ORG_ID.slice(0, 8)}…)
+            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+              {ACTIVE_ORG_ID.slice(0, 8)}…
             </span>
           </div>
 
-          <div className="hidden items-center gap-1 md:flex">
-            <Link
-              to="/demo"
-              className="rounded-full px-2.5 py-1 text-[11px] text-slate-400 border border-slate-200 cursor-not-allowed"
-            >
-              Demo
-            </Link>
-            <Link
-              to="/benchmark"
-              className="rounded-full px-2.5 py-1 text-[11px] text-slate-400 border border-slate-200 cursor-not-allowed"
-            >
-              Benchmark
-            </Link>
-          </div>
+          <Link
+            to="/demo"
+            className="rounded-full border px-3 py-1 text-xs text-slate-500"
+          >
+            Demo
+          </Link>
+
+          <Link
+            to="/benchmark"
+            className="rounded-full border px-3 py-1 text-xs text-slate-500"
+          >
+            Benchmark
+          </Link>
         </div>
       </div>
     </header>
