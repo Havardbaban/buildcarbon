@@ -34,7 +34,6 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // simple create form
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -65,7 +64,7 @@ export default function ProjectsPage() {
 
       const mapped: ProjectRow[] = (data ?? []).map((r: any) => ({
         id: String(r.id),
-        title: String(r.title),
+        title: String(r.title ?? ""),
         description: r.description ?? null,
         category: r.category ?? null,
         vendor: r.vendor ?? null,
@@ -73,13 +72,15 @@ export default function ProjectsPage() {
 
         capex_nok: Number(r.capex_nok ?? 0),
         opex_annual_nok: Number(r.opex_annual_nok ?? 0),
-        expected_reduction_rate: Number(r.expected_reduction_rate ?? 0),
+        expected_reduction_rate: Number(r.expected_reduction_rate ?? 0.1),
 
         lifetime_years: Number(r.lifetime_years ?? 5),
         discount_rate: Number(r.discount_rate ?? 0.08),
-        carbon_price_per_ton_nok: Number(r.carbon_price_per_ton_nok ?? SHADOW_PRICE_PER_TONN_NOK),
+        carbon_price_per_ton_nok: Number(
+          r.carbon_price_per_ton_nok ?? SHADOW_PRICE_PER_TONN_NOK
+        ),
 
-        created_at: String(r.created_at),
+        created_at: String(r.created_at ?? ""),
       }));
 
       setProjects(mapped);
@@ -108,7 +109,9 @@ export default function ProjectsPage() {
 
         lifetime_years: Number(form.lifetime_years ?? 5),
         discount_rate: Number(form.discount_rate ?? 0.08),
-        carbon_price_per_ton_nok: Number(form.carbon_price_per_ton_nok ?? SHADOW_PRICE_PER_TONN_NOK),
+        carbon_price_per_ton_nok: Number(
+          form.carbon_price_per_ton_nok ?? SHADOW_PRICE_PER_TONN_NOK
+        ),
       };
 
       const { error } = await supabase.from("measures_projects").insert(payload);
@@ -121,12 +124,41 @@ export default function ProjectsPage() {
     }
   }
 
+  async function deleteProject(id: string) {
+    const ok = window.confirm(
+      "Er du sikker på at du vil slette dette tiltaket?\nDette kan ikke angres."
+    );
+    if (!ok) return;
+
+    try {
+      setError(null);
+
+      const { error } = await supabase
+        .from("measures_projects")
+        .delete()
+        .eq("id", id)
+        .eq("org_id", ACTIVE_ORG_ID);
+
+      if (error) throw error;
+
+      await load();
+    } catch (e: any) {
+      setError(e?.message ?? "Kunne ikke slette tiltak");
+    }
+  }
+
   useEffect(() => {
     load();
+
     const ch = supabase
       .channel("projects-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "measures_projects" }, load)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "measures_projects" },
+        () => load()
+      )
       .subscribe();
+
     return () => {
       supabase.removeChannel(ch);
     };
@@ -134,9 +166,7 @@ export default function ProjectsPage() {
   }, []);
 
   const computed = useMemo(() => {
-    // NOTE: Vi trenger årlig CO2/kr-sparing for ROI.
-    // Foreløpig lar vi brukeren sette "annualCostSavings" og "annualCo2Savings" i neste iterasjon.
-    // For nå viser vi beregningsmotoren med 0 som default – du kan utvide senere.
+    // Foreløpig: annual savings = 0 (til vi kobler til invoice_lines-baseline)
     return projects.map((p) => {
       const input: ProjectInput = {
         capexNok: p.capex_nok,
@@ -166,21 +196,26 @@ export default function ProjectsPage() {
         </p>
       </header>
 
+      {/* Create form */}
       <section className="rounded-2xl border bg-white shadow-sm p-4 space-y-3">
         <div className="text-lg font-semibold">Legg til nytt tiltak</div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <Field label="Tittel">
-            <input className="w-full rounded-xl border p-2"
+            <input
+              className="w-full rounded-xl border p-2"
               value={form.title}
               onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="Bytt til grønn strøm / effektivisering / ..."/>
+              placeholder="Bytt til grønn strøm / effektivisering / …"
+            />
           </Field>
 
           <Field label="Kategori">
-            <select className="w-full rounded-xl border p-2"
+            <select
+              className="w-full rounded-xl border p-2"
               value={form.category}
-              onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}>
+              onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+            >
               <option value="electricity">electricity</option>
               <option value="fuel">fuel</option>
               <option value="transport">transport</option>
@@ -190,54 +225,96 @@ export default function ProjectsPage() {
           </Field>
 
           <Field label="Leverandør (valgfritt)">
-            <input className="w-full rounded-xl border p-2"
+            <input
+              className="w-full rounded-xl border p-2"
               value={form.vendor}
               onChange={(e) => setForm((f) => ({ ...f, vendor: e.target.value }))}
-              placeholder="DN Media / Hafslund / ..."/>
+              placeholder="DN Media / Hafslund / …"
+            />
           </Field>
 
           <Field label="CAPEX (NOK)">
-            <input className="w-full rounded-xl border p-2" type="number"
+            <input
+              className="w-full rounded-xl border p-2"
+              type="number"
               value={form.capex_nok}
-              onChange={(e) => setForm((f) => ({ ...f, capex_nok: Number(e.target.value) }))}/>
+              onChange={(e) =>
+                setForm((f) => ({ ...f, capex_nok: Number(e.target.value) }))
+              }
+            />
           </Field>
 
           <Field label="Årlig OPEX (NOK)">
-            <input className="w-full rounded-xl border p-2" type="number"
+            <input
+              className="w-full rounded-xl border p-2"
+              type="number"
               value={form.opex_annual_nok}
-              onChange={(e) => setForm((f) => ({ ...f, opex_annual_nok: Number(e.target.value) }))}/>
+              onChange={(e) =>
+                setForm((f) => ({ ...f, opex_annual_nok: Number(e.target.value) }))
+              }
+            />
           </Field>
 
           <Field label="Forventet reduksjon (%)">
-            <input className="w-full rounded-xl border p-2" type="number" step="0.01"
+            <input
+              className="w-full rounded-xl border p-2"
+              type="number"
+              step="0.01"
               value={form.expected_reduction_rate}
-              onChange={(e) => setForm((f) => ({ ...f, expected_reduction_rate: Number(e.target.value) }))}/>
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  expected_reduction_rate: Number(e.target.value),
+                }))
+              }
+            />
           </Field>
 
           <Field label="Levetid (år)">
-            <input className="w-full rounded-xl border p-2" type="number"
+            <input
+              className="w-full rounded-xl border p-2"
+              type="number"
               value={form.lifetime_years}
-              onChange={(e) => setForm((f) => ({ ...f, lifetime_years: Number(e.target.value) }))}/>
+              onChange={(e) =>
+                setForm((f) => ({ ...f, lifetime_years: Number(e.target.value) }))
+              }
+            />
           </Field>
 
           <Field label="Diskonteringsrate (f.eks 0.08)">
-            <input className="w-full rounded-xl border p-2" type="number" step="0.01"
+            <input
+              className="w-full rounded-xl border p-2"
+              type="number"
+              step="0.01"
               value={form.discount_rate}
-              onChange={(e) => setForm((f) => ({ ...f, discount_rate: Number(e.target.value) }))}/>
+              onChange={(e) =>
+                setForm((f) => ({ ...f, discount_rate: Number(e.target.value) }))
+              }
+            />
           </Field>
 
           <Field label="CO₂-pris (NOK/tonn)">
-            <input className="w-full rounded-xl border p-2" type="number"
+            <input
+              className="w-full rounded-xl border p-2"
+              type="number"
               value={form.carbon_price_per_ton_nok}
-              onChange={(e) => setForm((f) => ({ ...f, carbon_price_per_ton_nok: Number(e.target.value) }))}/>
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  carbon_price_per_ton_nok: Number(e.target.value),
+                }))
+              }
+            />
           </Field>
         </div>
 
         <Field label="Beskrivelse (valgfritt)">
-          <textarea className="w-full rounded-xl border p-2"
+          <textarea
+            className="w-full rounded-xl border p-2"
             value={form.description}
             onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-            placeholder="Hva gjør tiltaket, hvorfor, antagelser..."/>
+            placeholder="Hva gjør tiltaket, hvorfor, antagelser…"
+          />
         </Field>
 
         <button
@@ -248,6 +325,7 @@ export default function ProjectsPage() {
         </button>
       </section>
 
+      {/* List */}
       <section className="space-y-3">
         <div className="text-lg font-semibold">Tiltak (med finans)</div>
 
@@ -257,15 +335,26 @@ export default function ProjectsPage() {
           <div className="space-y-3">
             {computed.map(({ p, m }) => (
               <div key={p.id} className="rounded-2xl border bg-white shadow-sm p-4 space-y-2">
-                <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-2">
+                <div className="flex items-start justify-between gap-4">
                   <div>
                     <div className="text-lg font-semibold">{p.title}</div>
                     <div className="text-sm text-neutral-600">
-                      {p.category ?? "—"} {p.vendor ? `· ${p.vendor}` : ""} · status: {p.status}
+                      {p.category ?? "—"} {p.vendor ? `· ${p.vendor}` : ""} · status:{" "}
+                      {p.status}
                     </div>
                   </div>
-                  <div className="text-sm text-neutral-600">
-                    CO₂-pris: {fmtNok(p.carbon_price_per_ton_nok)} / tonn
+
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="text-sm text-neutral-600">
+                      CO₂-pris: {fmtNok(p.carbon_price_per_ton_nok)} / tonn
+                    </div>
+
+                    <button
+                      onClick={() => deleteProject(p.id)}
+                      className="rounded-xl border border-red-200 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                    >
+                      Slett
+                    </button>
                   </div>
                 </div>
 
