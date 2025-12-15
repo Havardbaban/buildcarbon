@@ -1,6 +1,5 @@
 // src/lib/saveDocumentLinesWithCo2.ts
 import { supabase } from "./supabase";
-import { ACTIVE_ORG_ID } from "./org";
 import { classifyLineItem } from "./classifyLineItem";
 
 type ParsedLine = {
@@ -29,8 +28,9 @@ function cleanCategory(c: any) {
 
 /**
  * Lagrer invoice_lines med CO2 + kategori (ALLTID).
+ * OBS: Ingen org_id her, siden dere ikke har org_id på invoice_lines.
  */
-export async function saveDocumentLinesWithCo2(args: SaveArgs) {
+async function saveDocumentLinesWithCo2(args: SaveArgs) {
   const { invoice_id, vendor, lines } = args;
 
   if (!invoice_id) throw new Error("saveDocumentLinesWithCo2: missing invoice_id");
@@ -43,7 +43,6 @@ export async function saveDocumentLinesWithCo2(args: SaveArgs) {
     });
 
     return {
-      // hvis dere IKKE har org_id på invoice_lines (som feilen viste), ikke send org_id her
       invoice_id,
       description: l.description ?? "",
       quantity: l.quantity ?? null,
@@ -54,7 +53,7 @@ export async function saveDocumentLinesWithCo2(args: SaveArgs) {
     };
   });
 
-  // valgfritt: slett gamle linjer for invoice først (slik at re-upload ikke dupliserer)
+  // Unngå duplikater ved re-upload
   const del = await supabase.from("invoice_lines").delete().eq("invoice_id", invoice_id);
   if (del.error) throw del.error;
 
@@ -63,3 +62,5 @@ export async function saveDocumentLinesWithCo2(args: SaveArgs) {
   const ins = await supabase.from("invoice_lines").insert(rows);
   if (ins.error) throw ins.error;
 }
+
+export default saveDocumentLinesWithCo2;
