@@ -5,6 +5,7 @@ import { ACTIVE_ORG_ID } from "./org";
 export type MeasureRow = {
   id: string;
   org_id: string;
+
   name: string;
   category: string;
   vendor: string | null;
@@ -24,21 +25,21 @@ export type MeasureRow = {
 export type MeasureBaseline = {
   months: number;
 
-  // Summer for perioden (N måneder)
   period_amount_nok: number;
   period_co2_kg: number;
 
-  // Skalert til "årlig baseline"
   annual_amount_nok: number;
   annual_co2_kg: number;
 
-  // Sparing (årlig)
   annual_saving_nok: number;
   annual_saving_kg: number;
 
-  // Skyggekost/gevinst (årlig) fra CO2-pris
   annual_shadow_saving_nok: number;
 };
+
+// 🔧 Hvis schemaet ditt bruker andre navn, endre her:
+const INVOICE_PK_COL = "id"; // invoices.id
+const LINE_INVOICE_FK_COL = "invoice_id"; // invoice_lines.invoice_id
 
 function monthsAgoISO(months: number) {
   const d = new Date();
@@ -52,13 +53,47 @@ function toNum(x: any): number {
 }
 
 /**
- * Henter tilgjengelige kategorier fra invoice_lines for dropdown.
+ * Hent invoices i perioden (org_id + created_at filter).
+ * Returnerer både id-liste og et map id->vendor (til vendor-filter på tiltak).
+ */
+async function fetchInvoicesInPeriod(orgId: string, months: number) {
+  const since = monthsAgoISO(months);
+
+  const { data, error } = await supabase
+    .from("invoices")
+    .select(`${INVOICE_PK_COL}, vendor, created_at`)
+    .eq("org_id", orgId)
+    .gte("created_at", since);
+
+  if (error) throw error;
+
+  const ids: string[] = [];
+  const vendorById: Record<string, string | null> = {};
+
+  for (const r of data ?? []) {
+    const id = (r as any)[INVOICE_PK_COL];
+    if (!id) continue;
+    ids.push(id);
+    vendorById[id] = (r as any).vendor ?? null;
+  }
+
+  return { ids, vendorById, since };
+}
+
+/**
+ * Kategorier fra invoice_lines, men filtrert til invoices i org + periode.
  */
 export async function fetchInvoiceLineCategories(orgId = ACTIVE_ORG_ID): Promise<string[]> {
+  // Vi bruker standard 12 mnd for dropdown (kan endres)
+  const months = 12;
+  const { ids } = await fetchInvoicesInPeriod(orgId, months);
+
+  if (ids.length === 0) return [];
+
   const { data, error } = await supabase
     .from("invoice_lines")
     .select("category")
-    .eq("org_id", orgId);
+    .in(LINE_INVOICE_FK_COL, ids);
 
   if (error) throw error;
 
@@ -71,7 +106,7 @@ export async function fetchInvoiceLineCategories(orgId = ACTIVE_ORG_ID): Promise
 }
 
 /**
- * Henter vendor-list (fra invoices.vendor) for dropdown.
+ * Vendor-list fra invoices (for dropdown).
  */
 export async function fetchVendors(orgId = ACTIVE_ORG_ID): Promise<string[]> {
   const { data, error } = await supabase
@@ -129,33 +164,36 @@ export async function deleteMeasure(id: string) {
 
 /**
  * Baseline + sparing:
- * - Vi bruker invoice_lines.amount_nok og invoice_lines.co2_kg
- * - Filtrerer på category + (valgfritt) vendor via invoices.vendor
- * - Ser N måneder bakover, skalerer til "årlig baseline"
+ * - Filtrer invoices på org_id + periode
+ * - Hent invoice_lines for disse invoice_id-ene + category
+ * - Summer amount_nok + co2_kg
+ * - Vendor-filter gjøres via invoice->vendor map
  */
 export async function computeMeasureBaseline(
   measure: Pick<MeasureRow, "category" | "vendor" | "baseline_months" | "reduction_percent" | "co2_price_nok_per_ton">,
   orgId = ACTIVE_ORG_ID
 ): Promise<MeasureBaseline> {
   const months = Math.max(1, Math.floor(toNum(measure.baseline_months ?? 12)));
-  const since = monthsAgoISO(months);
 
-  // 1) Hent invoice_lines for org + kategori + tidsfilter
-  // Vi joiner invoices for å kunne filtrere på vendor (hvis ønsket)
+  const { ids, vendorById } = await fetchInvoicesInPeriod(orgId, months);
+  if (ids.length === 0) {
+    return {
+      months,
+      period_amount_nok: 0,
+      period_co2_kg: 0,
+      annual_amount_nok: 0,
+      annual_co2_kg: 0,
+      annual_saving_nok: 0,
+      annual_saving_kg: 0,
+      annual_shadow_saving_nok: 0,
+    };
+  }
+
   const { data, error } = await supabase
     .from("invoice_lines")
-    .select(
-      `
-      amount_nok,
-      co2_kg,
-      invoice_id,
-      created_at,
-      invoices:invoice_id ( vendor, created_at )
-    `
-    )
-    .eq("org_id", orgId)
+    .select("amount_nok, co2_kg, category, invoice_id")
     .eq("category", measure.category)
-    .gte("created_at", since);
+    .in(LINE_INVOICE_FK_COL, ids);
 
   if (error) throw error;
 
@@ -163,33 +201,32 @@ export async function computeMeasureBaseline(
   let periodCo2 = 0;
 
   for (const row of data ?? []) {
-    const invVendor = (row as any)?.invoices?.vendor ?? null;
+    const invoiceId = (row as any)[LINE_INVOICE_FK_COL];
+    const invVendor = invoiceId ? vendorById[invoiceId] : null;
 
-    // vendor-filter: hvis measure.vendor er satt, må invoices.vendor matche (case-insensitive)
-    if (measure.vendor && typeof invVendor === "string") {
-      if (invVendor.trim().toLowerCase() !== measure.vendor.trim().toLowerCase()) continue;
-    } else if (measure.vendor && !invVendor) {
-      // hvis tiltak har vendor-filter, men vi mangler vendor på faktura → ikke ta med
-      continue;
+    if (measure.vendor) {
+      const want = measure.vendor.trim().toLowerCase();
+      const have = (invVendor ?? "").trim().toLowerCase();
+      if (!have || have !== want) continue;
     }
 
     periodAmount += toNum((row as any).amount_nok);
     periodCo2 += toNum((row as any).co2_kg);
   }
 
-  // 2) Skaler til annual baseline
+  // Skaler til "årlig baseline"
   const scale = 12 / months;
   const annualAmount = periodAmount * scale;
   const annualCo2 = periodCo2 * scale;
 
-  // 3) Sparing (årlig)
+  // Sparing
   const rp = Math.min(100, Math.max(0, toNum(measure.reduction_percent)));
   const factor = rp / 100;
 
   const annualSavingNok = annualAmount * factor;
   const annualSavingKg = annualCo2 * factor;
 
-  // 4) Skyggegevinst (CO2-pris i NOK/tonn)
+  // Skyggegevinst
   const co2Price = toNum(measure.co2_price_nok_per_ton ?? 1500);
   const annualShadow = (annualSavingKg / 1000) * co2Price;
 
@@ -205,9 +242,6 @@ export async function computeMeasureBaseline(
   };
 }
 
-/**
- * Enkel formattering
- */
 export function fmtNok(n: number) {
   return new Intl.NumberFormat("nb-NO", { style: "currency", currency: "NOK", maximumFractionDigits: 0 }).format(n);
 }
